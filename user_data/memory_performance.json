@@ -1,0 +1,31 @@
+{
+  "response_metrics": {
+    "last_response_timestamp": "2024-06-15T17:05:00+08:00",
+    "average_response_time": 3.5,
+    "total_responses": 12
+  },
+  "error_metrics": {
+    "current_errors": 1,
+    "total_errors": 3,
+    "error_rate": 0.08
+  },
+  "hint_metrics": {
+    "hint_count": 2,
+    "hint_requested": true,
+    "last_hint_timestamp": "2024-06-15T17:04:30+08:00"
+  },
+  "current_level_progress": {
+    "level_name": "entity",
+    "retrieved_items": [
+      {"item": "购物车", "timestamp": "2024-06-15T17:03:00+08:00"},
+      {"item": "柠檬", "timestamp": "2024-06-15T17:03:30+08:00"},
+      {"item": "莴笋", "timestamp": "2024-06-15T17:04:00+08:00"}
+    ],
+    "total_items": 7,
+    "completion_rate": 0.43
+  },
+  "session_metrics": {
+    "session_start": "2024-06-15T17:00:00+08:00",
+    "current_duration": 300
+  }
+}

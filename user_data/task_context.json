@@ -1,0 +1,61 @@
+{
+  "current_level": {
+    "name": "entity",
+    "description": "识别和回忆具体物体/人物"
+  },
+  "current_task": {
+    "task_type": "entity_recall",
+    "description": "回忆在饮料区选择了哪些商品",
+    "difficulty": "中等",
+    "time_limit": 120
+  },
+  "task_stage": {
+    "stage": "in_progress",
+    "description": "任务进行中",
+    "start_time": "2024-06-15T17:00:00+08:00"
+  },
+  "retrieval_context": {
+    "scene": "选择饮料",
+    "parent_activity": {
+      "theme": "超市购物",
+      "location": "胖东来超市",
+      "time_range": "2024年6月15日下午5点"
+    },
+    "current_target":
+    {
+        "item_name": "NFC果汁",
+        "time_range": {
+            "start": "01:15",
+            "end": "01:27"
+        },
+        "expected_actions": [
+            "选择NFC果汁",
+            "选择三元牛奶"
+        ],
+        "bounding_box": {
+            "x": 200,
+            "y": 10,
+            "width": 400,
+            "height": 400
+        },
+        "target_description": "饮料区的黄色果汁和白色牛奶"
+    },
+    "previous_retrievals": [
+      {
+        "scene": "进入超市",
+        "timestamp": "2024-06-15T17:01:00+08:00",
+        "successful": true
+      },
+      {
+        "scene": "选择蔬果",
+        "timestamp": "2024-06-15T17:02:00+08:00",
+        "successful": true
+      }
+    ]
+  },
+  "progress_tracking": {
+    "completed_events": 3,
+    "total_events": 7,
+    "current_sub_event": 6
+  }
+}

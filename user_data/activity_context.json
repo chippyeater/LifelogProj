@@ -1,0 +1,171 @@
+{
+  "activity": {
+    "description": "去胖东来超市购物",
+    "time_range": "2024年6月15日下午5点",
+    "location": "胖东来超市",
+    "participants": ["我", "朋友"],
+    "audio_clues": [
+      "超市背景音乐",
+      "购物车轮子声",
+      "顾客交谈声"
+    ],
+    "visual_cues": [
+      "明亮的超市灯光",
+      "整齐的商品货架",
+      "醒目的促销广告"
+    ]
+  },
+
+  "进入超市": {
+    "description": "推着购物车进入超市",
+    "time_range": "00:00-00:05",
+    "visual_cues": [
+      "购物车队列",
+      "超市入口标识",
+      "收银台区域"
+    ],
+    "audio_clues": [
+      "自动门开启声",
+      "欢迎广播"
+    ],
+    "text_clues": [
+      "入口处的防疫提示",
+      "购物车使用说明"
+    ],
+    "购物篮":{
+        "key_frame": "00:03",
+        "entity_images": ["visual_clues/aigc购物篮.jpg"],
+        "visual_cues": ["深蓝色"],
+        "text_clues": [],
+        "audio_clues": [],
+        "bounding_box": {
+            "x": 311,
+            "y": 273,
+            "width": 200,
+            "height": 150
+        },
+        "target_description": "深蓝色的购物篮，放在购物车里"
+    }
+  },
+  
+  "选择蔬果": {
+    "description": "在蔬果区选择柠檬和莴笋",
+    "time_range": "00:05-00:12",
+    "visual_cues": [
+      "黄色柠檬堆",
+      "绿色莴笋捆",
+      "保鲜膜包装"
+    ],
+    "text_clues": [
+      "柠檬价格标签：¥3.5/个",
+      "莴笋价格标签：¥2.8/斤"
+    ],
+    "audio_clues": [],
+    "柠檬": {
+      "key_frame": "00:08",
+      "entity_images": ["visual_clues/柠檬.jpg"],
+      "visual_cues": ["黄色椭圆形", "凹凸表面", "保鲜膜包装"],
+      "text_clues": ["进口柠檬", "产地：四川", "价格：¥3.5/个"],
+      "audio_clues": ["手指按压柠檬皮的轻微声响"],
+      "bounding_box": {
+        "x": 150,
+        "y": 200,
+        "width": 180,
+        "height": 120
+      },
+      "target_description": "黄色的柠檬，表面有凹凸纹理，包裹在保鲜膜中"
+    },
+    "莴笋": {
+      "key_frame": "00:12",
+      "entity_images": ["visual_clues/莴笋.jpg"],
+      "visual_cues": ["长条状", "绿色外皮", "白色根部", "透明包装袋"],
+      "text_clues": ["本地莴笋", "价格：¥2.8/斤", "净重：约500g"],
+      "audio_cues": ["蔬菜放入购物袋的沙沙声"],
+      "bounding_box": {
+        "x": 280,
+        "y": 180,
+        "width": 150,
+        "height": 250
+      },
+      "target_description": "绿色的莴笋，长条形状，装在透明包装袋中"
+    }
+  },
+  
+  "选择饮料": {
+    "description": "在饮料区选择果汁和牛奶",
+    "time_range": "01:15-01:27",
+    "visual_cues": [
+      "冷藏货架的灯光",
+      "各种饮料瓶排列",
+      "促销价签"
+    ],
+    "audio_clues": [
+      "冷藏柜运行声",
+      "瓶罐碰撞声"
+    ],
+    "text_clues": [
+      "NFC果汁：100%纯果汁",
+      "三元牛奶：全脂牛奶"
+    ],
+    "NFC果汁": {
+      "entity_images": ["visual_clues/NFC果汁.jpg"],
+      "visual_cues": ["黄色液体", "透明塑料瓶"],
+      "text_clues": ["容量：1L", "产地：河南"],
+      "audio_clues": ["摇晃时的液体声"],
+      "bounding_box": {
+        "x": 311,
+        "y": 273,
+        "width": 200,
+        "height": 150
+      },
+      "target_description": "黄色的NFC果汁，透明塑料瓶包装"
+    },
+    "三元牛奶": {
+      "entity_images": ["visual_clues/三元牛奶.jpg"],
+      "visual_cues": ["白色纸盒", "红色logo"],
+      "text_clues": ["保质期：7天", "容量：250ml"],
+      "audio_clues": ["纸盒翻动声"],
+      "bounding_box": {
+        "x": 248,
+        "y": 14,
+        "width": 200,
+        "height": 150
+      },
+      "target_description": "白色的三元牛奶，纸盒包装"
+    }
+  },
+  
+  "结账": {
+    "description": "在收银台结账离开",
+    "time_range": "01:47-01:54",
+    "visual_cues": [
+      "收银员扫码",
+      "小票打印",
+      "购物袋装货"
+    ],
+    "audio_clues": [
+      "扫码枪嘀声",
+      "收银机打印声",
+      "支付成功提示音"
+    ],
+    "text_clues": [
+      "总金额：¥156.80",
+      "支付方式：微信支付",
+      "小票抬头：胖东来超市"
+    ],
+    "购物小票": {
+      "key_frame": "01:54",
+      "entity_images": ["visual_clues/购物小票.jpg"],
+      "visual_cues": ["白色纸条", "黑色打印字", "长长的一条"],
+      "text_clues": ["商品清单", "合计金额", "支付时间"],
+      "audio_clues": ["小票打印的滋滋声"],
+      "bounding_box": {
+        "x": 400,
+        "y": 300,
+        "width": 100,
+        "height": 400
+      },
+      "target_description": "白色的购物小票，上面打印着商品清单和金额"
+    }
+  }
+}
