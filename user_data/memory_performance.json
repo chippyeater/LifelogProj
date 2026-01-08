@@ -17,11 +17,24 @@
   "current_level_progress": {
     "level_name": "entity",
     "retrieved_items": [
-      {"item": "购物车", "timestamp": "2024-06-15T17:03:00+08:00"},
-      {"item": "柠檬", "timestamp": "2024-06-15T17:03:30+08:00"},
-      {"item": "莴笋", "timestamp": "2024-06-15T17:04:00+08:00"}
+      {"item": "柠檬",
+        "timestamp": "2024-06-15T17:03:30+08:00",
+        "scene": "选择蔬果",
+        "successful": true},
+      {"item": "莴笋",
+        "timestamp": "2024-06-15T17:03:52+08:00",
+        "scene": "选择蔬果",
+        "successful": true
+      }
     ],
-    "total_items": 7,
+    "wrong_items": [
+      {"item": "香蕉",
+        "timestamp": "2024-06-15T17:03:18+08:00",
+        "scene": "选择蔬果",
+        "successful": true
+      }
+    ],
+    "total_items": 3,
     "completion_rate": 0.43
   },
   "session_metrics": {

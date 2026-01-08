@@ -4,7 +4,7 @@
     "description": "识别和回忆具体物体/人物"
   },
   "current_task": {
-    "task_type": "entity_recall",
+    "task_type": "强制选择",
     "description": "回忆在饮料区选择了哪些商品",
     "difficulty": "中等",
     "time_limit": 120
@@ -21,25 +21,7 @@
       "location": "胖东来超市",
       "time_range": "2024年6月15日下午5点"
     },
-    "current_target":
-    {
-        "item_name": "NFC果汁",
-        "time_range": {
-            "start": "01:15",
-            "end": "01:27"
-        },
-        "expected_actions": [
-            "选择NFC果汁",
-            "选择三元牛奶"
-        ],
-        "bounding_box": {
-            "x": 200,
-            "y": 10,
-            "width": 400,
-            "height": 400
-        },
-        "target_description": "饮料区的黄色果汁和白色牛奶"
-    },
+    "current_target":"NFC果汁",
     "previous_retrievals": [
       {
         "scene": "进入超市",
