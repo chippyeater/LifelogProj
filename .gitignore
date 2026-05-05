@@ -21,3 +21,6 @@ backend/output/
 *.db
 *.sqlite
 *.sqlite3
+
+.env
+backend/.env
