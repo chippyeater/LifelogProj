@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../Unity/YTY/YTY/TemplateData"
+		},
+		{
+			"path": "F:/Unity/Projects/YTY/YTY/YTY/Assets/Scripts"
+		}
+	],
+	"settings": {
+		"dotnet.preferCSharpExtension": true,
+		"powershell.cwd": "LifelogProj"
+	}
+}

@@ -1,0 +1,180 @@
+{
+  "game_flow": [
+    {
+      "stage_id": "stage_001",
+      "stage_name": "逛超市",
+      "stage_type": "structure",
+      "stage_index": 1,
+      "task_type": "selection",
+      "description": "从多个选项中选择正确的活动场景",
+      "correct_answer": "逛超市",
+      "options": ["逛超市", "去餐厅", "看电影", "散步"]
+    },
+    {
+      "stage_id": "stage_002", 
+      "stage_name": "进入超市",
+      "stage_type": "narrative",
+      "stage_index": 2,
+      "task_type": "recall",
+      "description": "回忆是否有'进入超市'这个环节",
+      "long_description": "我们推着购物车，走过自动门，明亮的灯光和琳琅满目的商品立刻映入眼帘。",
+      "distractor_description": "离开超市",
+      "correct_answer": true
+    },
+    {
+      "stage_id": "stage_003",
+      "stage_name": "挑选饮料",
+      "stage_type": "narrative", 
+      "stage_index": 3,
+      "task_type": "recall",
+      "description": "回忆是否有'挑选饮料'这个环节",
+      "long_description": "走到冷柜旁，我们打开柜门，拿了一盒香蕉味的牛奶，还为自己选了一瓶芬达。",
+      "distractor_description": "挑选面包",
+      "correct_answer": true
+    },
+    {
+      "stage_id": "stage_004",
+      "stage_name": "挑选零食",
+      "stage_type": "narrative",
+      "stage_index": 4, 
+      "task_type": "recall",
+      "description": "回忆是否有'挑选零食'这个环节",
+      "long_description": "最后我们逛到了零食区，我们拿了红色包装的泡面、芝麻味的饼干和一包瓜子。",
+      "distractor_description": "挑选日用品",
+      "correct_answer": true
+    },
+    {
+      "stage_id": "stage_005",
+      "stage_name": "挑选蔬菜和水果", 
+      "stage_type": "narrative",
+      "stage_index": 5,
+      "task_type": "recall",
+      "description": "回忆是否有'挑选蔬菜和水果'这个环节",
+      "long_description": "我们在生鲜区停留了很久，精心挑选了3个橙子和2个茄子。",
+      "distractor_description": "挑选肉类",
+      "correct_answer": true
+    },
+    {
+      "stage_id": "stage_006",
+      "stage_name": "进入超市",
+      "stage_type": "narrative",
+      "stage_index": 6,
+      "task_type": "sequencing",
+      "description": "将'进入超市'放在正确的顺序位置",
+      "correct_answer": "进入超市",
+      "correct_position": 1,
+      "total_items": 4
+    },
+    {
+      "stage_id": "stage_007",
+      "stage_name": "挑选饮料",
+      "stage_type": "narrative",
+      "stage_index": 7,
+      "task_type": "sequencing",
+      "description": "将'挑选饮料'放在正确的顺序位置", 
+      "correct_answer": "挑选饮料",
+      "correct_position": 2,
+      "total_items": 4
+    },
+    {
+      "stage_id": "stage_008",
+      "stage_name": "挑选零食",
+      "stage_type": "narrative",
+      "stage_index": 8,
+      "task_type": "sequencing",
+      "description": "将'挑选零食'放在正确的顺序位置",
+      "correct_answer": "挑选零食", 
+      "correct_position": 3,
+      "total_items": 4
+    },
+    {
+      "stage_id": "stage_009", 
+      "stage_name": "挑选蔬菜和水果",
+      "stage_type": "narrative",
+      "stage_index": 9,
+      "task_type": "sequencing", 
+      "description": "将'挑选蔬菜和水果'放在正确的顺序位置",
+      "correct_answer": "挑选蔬菜和水果",
+      "correct_position": 4,
+      "total_items": 4
+    },
+    {
+      "stage_id": "stage_010",
+      "stage_name": "挑选蔬菜和水果",
+      "stage_type": "item",
+      "stage_index": 10,
+      "task_type": "detail_recall",
+      "description": "回忆蔬菜和水果类的具体物品",
+      "related_narrative": "挑选蔬菜和水果",
+      "correct_answer": ["橙子", "茄子"],
+      "advanced_recall_questions": [
+        {
+          "target_item": "橙子",
+          "question": "买了几个橙子？",
+          "options": ["3", "5"],
+          "correct_answer": "3"
+        },
+        {
+          "target_item": "茄子",
+          "question": "买了几个茄子？",
+          "options": ["2", "4"],
+          "correct_answer": "2"
+        }
+      ]
+    },
+    {
+      "stage_id": "stage_011",
+      "stage_name": "挑选饮料",
+      "stage_type": "item", 
+      "stage_index": 11,
+      "task_type": "detail_recall",
+      "description": "回忆饮料类的具体物品",
+      "related_narrative": "挑选饮料",
+      "correct_answer": ["牛奶", "芬达"],
+      "advanced_recall_questions": [
+        {
+          "target_item": "牛奶",
+          "question": "买了什么口味的牛奶？",
+          "options": ["香蕉味", "原味"],
+          "correct_answer": "香蕉味"
+        },
+        {
+          "target_item": "芬达",
+          "question": "买的芬达是哪种包装？",
+          "options": ["瓶装", "罐装"],
+          "correct_answer": "瓶装"
+        }
+      ]
+    },
+    {
+      "stage_id": "stage_012",
+      "stage_name": "挑选零食",
+      "stage_type": "item",
+      "stage_index": 12,
+      "task_type": "detail_recall", 
+      "description": "回忆零食类的具体物品",
+      "related_narrative": "挑选零食",
+      "correct_answer": ["饼干", "泡面", "瓜子"],
+      "advanced_recall_questions": [
+        {
+          "target_item": "饼干",
+          "question": "买了什么口味的饼干？",
+          "options": ["芝麻味", "巧克力味"],
+          "correct_answer": "芝麻味"
+        },
+        {
+          "target_item": "泡面",
+          "question": "泡面的包装是什么颜色的？",
+          "options": ["红色", "蓝色"],
+          "correct_answer": "红色"
+        },
+        {
+          "target_item": "瓜子",
+          "question": "买了几包？",
+          "options": ["1", "3"],
+          "correct_answer": "1"
+        }
+      ]
+    }
+  ]
+}

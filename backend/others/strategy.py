@@ -1,19 +1,30 @@
-import json
+﻿import json
 import datetime
+import os
+import logging
+from dotenv import load_dotenv
 from jinja2 import Template
 from flask import Flask, jsonify
 from openai import OpenAI
-    
+
+load_dotenv()  # 鍔犺浇 .env 鏂囦欢涓殑鐜鍙橀噺
+
 client = OpenAI(
     base_url='https://api.siliconflow.cn/v1',
-    api_key='sk-uovqjhqjdgthwxrhtdoipiphjrayqtmhmmwkicacowrmwcrf'
+    api_key=os.getenv("SILICONFLOW_API_KEY")
 )
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 class RecallAssistant:
     def __init__(self, memory_perf_path, task_context_path, activity_context_path):
-        """初始化并加载上下文"""
+        """
+        鍒濆鍖栧苟鍔犺浇涓婁笅鏂囷紝璇诲彇锛?
+        - memory_performance.json锛堟彁绀烘鏁般€侀敊璇鏁般€佽〃鐜扮瓑锛?
+        - task_context.json锛堝綋鍓嶅洖蹇嗕换鍔″眰娆★細framework/narrative/entity锛宺etrieval_context 绛夛級
+        - activity_context.json锛堜簨浠?鍦烘櫙/绾跨储锛?
+        """
         with open(memory_perf_path, 'r', encoding='utf-8') as f:
             self.memory_perf = json.load(f)
         with open(task_context_path, 'r', encoding='utf-8') as f:
@@ -27,12 +38,15 @@ class RecallAssistant:
         self.response_timeout = 10
     
     def get_stage(self):
-        """从task_context里获取当前任务阶段信息
+        """浠巘ask_context閲岃幏鍙栧綋鍓嶄换鍔￠樁娈典俊鎭細starting / in_progress / ending
         """
         return self.task_context['task_stage']['stage']
     
     def get_memory_state(self):
-        """分析用户记忆状态"""
+        """
+        鍒嗘瀽鐢ㄦ埛璁板繂鐘舵€?
+        鏍规嵁閿欒鏁?鎻愮ず鏁颁箣绫绘槧灏勬垚 positive / negative
+        """
         last_response_str = self.memory_perf['response_metrics']['last_response_timestamp']
         current_time = datetime.datetime.now(datetime.timezone.utc)
         # mockup
@@ -43,7 +57,7 @@ class RecallAssistant:
         except ValueError:
             time_diff = 0
         
-        # 判断逻辑：当前错误>0 或 请求提示 或 超过10s未响应则判定为负向状态
+        # 鍒ゆ柇閫昏緫锛氬綋鍓嶉敊璇?0 鎴?璇锋眰鎻愮ず 鎴?瓒呰繃10s鏈搷搴斿垯鍒ゅ畾涓鸿礋鍚戠姸鎬?
         if (self.memory_perf['error_metrics']['current_errors'] > 0 or
             self.memory_perf['hint_metrics']['hint_requested'] or
             time_diff > self.response_timeout):
@@ -51,24 +65,27 @@ class RecallAssistant:
         return "positive"
     
     def select_strategy(self, stage, memory_state):
-        """根据任务阶段和记忆状态选择对话策略组件"""
+        """鏍规嵁浠诲姟闃舵鍜岃蹇嗙姸鎬侀€夋嫨瀵硅瘽绛栫暐缁勪欢"""
         strategy_matrix = {
             "start": {
-                "positive": ["探询"]
+                "positive": ["鎺㈣"]
             },
             "in_progress": {
-                "positive": ["祝贺", "重复"],
-                "negative": ["提示", "安慰", "校正"]
+                "positive": ["绁濊春", "閲嶅"],
+                "negative": ["鎻愮ず", "瀹夋叞", "鏍℃"]
             },
             "ending": {
-                "positive": ["总结", "祝贺"],
-                "negative": ["安慰", "总结"]
+                "positive": ["鎬荤粨", "绁濊春"],
+                "negative": ["瀹夋叞", "鎬荤粨"]
             }
         }
-        return strategy_matrix.get(stage, {}).get(memory_state, ["探询"]) 
+        return strategy_matrix.get(stage, {}).get(memory_state, ["鎺㈣"]) 
     
     def get_clues(self):
-        """根据当前任务上下文和记忆表现获取渐进式线索"""
+        """
+        鏍规嵁褰撳墠浠诲姟涓婁笅鏂囧拰璁板繂琛ㄧ幇鑾峰彇娓愯繘寮忕嚎绱?
+        绾跨储鈥滃己搴︹€濈敤 hint_count + error_count 绮楃暐璁＄畻 clue_level锛?~2锛?
+        """
         current_level = self.task_context['current_level']['name']
         hint_count = self.memory_perf['hint_metrics']['hint_count']
         error_count = self.memory_perf['error_metrics']['current_errors']
@@ -85,7 +102,7 @@ class RecallAssistant:
             return {"text": [], "visual": [], "audio": []}
         
     def get_theme_clues(self, clue_level):
-        """框架层线索：活动主题提示"""
+        """妗嗘灦灞傜嚎绱細娲诲姩涓婚鎻愮ず"""
         clues = {"text": [], "visual": [], "audio": []}
         activity = self.activity
         
@@ -105,7 +122,7 @@ class RecallAssistant:
         return clues
      
     def get_scene_clues(self, clue_level): 
-        """叙事层线索：场景/行为提示""" 
+        """鍙欎簨灞傜嚎绱細鍦烘櫙/琛屼负鎻愮ず""" 
         clues = {"text": [], "visual": [], "audio": []}
         current_scene = self.task_context['retrieval_context']['scene']
         scene = self.events.get(current_scene, {})
@@ -122,7 +139,7 @@ class RecallAssistant:
         return clues
     
     def get_entity_clues(self, clue_level):
-        """实体层线索：人物/物体提示"""
+        """瀹炰綋灞傜嚎绱細浜虹墿/鐗╀綋鎻愮ず"""
         clues = {"text": [], "visual": [], "audio": []}
         scene_name = self.task_context['retrieval_context']['scene']
         target_name = self.task_context['retrieval_context']['current_target']
@@ -143,20 +160,18 @@ class RecallAssistant:
                 if not clues['visual']: 
                     clues['text'] = target.get('text_clues', []) 
         else: 
-            entity_images = target.get('entity_images', [])
-            if not entity_images:
+            enhanced_path = target.get("enhanced_image_path")
+            if not enhanced_path:
                 enhanced = target.get("enhanced_visual_clues", [])
-                entity_images = [
-                    item.get("output_path")
-                    for item in enhanced
-                    if item.get("output_path")
-                ]
-            if entity_images: 
+                enhanced_path = next(
+                    (item.get("output_path") for item in enhanced if item.get("output_path")), None
+                )
+            if enhanced_path: 
                 bounding_box = target['bounding_box']
                  
                 clues['visual'] = [ 
                     { 
-                        "image": entity_images[0], 
+                        "image": enhanced_path, 
                         "type": "progressive", 
                         "steps": [ 
                             {"time": 0, "action": "mask", "area": bounding_box}, 
@@ -171,8 +186,8 @@ class RecallAssistant:
         return clues
  
     def generate_guide_prompt(self, strategy_components, clues): 
-        """构建记忆引导提示词""" 
-        # 提取上下文信息 
+        """鏋勫缓璁板繂寮曞鎻愮ず璇?"" 
+        # 鎻愬彇涓婁笅鏂囦俊鎭?
         context = self.task_context['retrieval_context']
         perf = self.memory_perf
         key_persons = [
@@ -191,7 +206,7 @@ class RecallAssistant:
             for i in strategy_components:
                 rules.append(strategy_components_rules.get(i))
 
-        # 准备提示词变量
+        # 鍑嗗鎻愮ず璇嶅彉閲?
         prompt_vars = {
             "task_level": self.task_context['current_level']['name'],
             "task_type": self.task_context['current_task']['task_type'],
@@ -216,50 +231,50 @@ class RecallAssistant:
         return prompt
      
     def get_response(self):
-        """生成记忆引导内容"""
-        # 获取任务阶段和记忆状态
+        """鐢熸垚璁板繂寮曞鍐呭"""
+        # 鑾峰彇浠诲姟闃舵鍜岃蹇嗙姸鎬?
         stage = self.get_stage()
         memory_state = self.get_memory_state() if stage == "in_progress" else None
         
-        # 选择策略并获取线索
+        # 閫夋嫨绛栫暐骞惰幏鍙栫嚎绱?
         strategy_components = self.select_strategy(stage, memory_state)
         clues = self.get_clues() if memory_state == "negative" else None
         
-        # 生成引导提示词
+        # 鐢熸垚寮曞鎻愮ず璇?
         prompt = self.generate_guide_prompt(strategy_components, clues)
 
-        # 调用API生成引导内容
+        # 璋冪敤API鐢熸垚寮曞鍐呭
         try:
             response = client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "system", 
                            "content": prompt},
                         #   {'role': 'user', 
-                        #    'content': "推理模型会给市场带来哪些新的机会"}
+                        #    'content': "鎺ㄧ悊妯″瀷浼氱粰甯傚満甯︽潵鍝簺鏂扮殑鏈轰細"}
                 ],
                 temperature=0.3,
                 max_tokens=1000
             )
             if response.choices[0].message.content:
-                print(response.choices[0].message.content)
+                logger.info(response.choices[0].message.content)
                 guide_content = json.loads(response.choices[0].message.content)
             else:
-                print("no content")
+                logger.warning("no content")
                 guide_content = {"dialogues": [{
                 "id": 1,
                 "strategy": "",
                 "content": ""
             }]}
         except Exception as e:
-            # API调用失败时返回默认引导
-            print(e)
+            # API璋冪敤澶辫触鏃惰繑鍥為粯璁ゅ紩瀵?
+            logger.exception("Guide generation failed: %s", e)
             guide_content = {"dialogues": [{
                 "id": 1,
                 "strategy": "",
                 "content": ""
             }]}
          
-        # 构建最终响应
+        # 鏋勫缓鏈€缁堝搷搴?
         return {
             "stage": stage,
             "memory_state": memory_state,
@@ -268,8 +283,15 @@ class RecallAssistant:
             "guide_content": guide_content
         }
 
+"""
+鎺ュ彛锛氳繑鍥烇細stage銆乵emory_state銆侀€夌敤绛栫暐缁勪欢銆佺嚎绱€佷互鍙婃渶缁堝璇濆紩瀵煎唴瀹?
+"""
 @app.route('/get_guide', methods=['GET'])
 def get_guide():
+    """
+    get_guide 鐨?Docstring
+    姣忔璇锋眰 new 涓€涓?RecallAssistant锛岀洿鎺ヨ繑鍥?assistant.get_response()
+    """
     assistant = RecallAssistant('user_data/memory_performance.json',
                                 'user_data/task_context.json',
                                 "user_data/activity_context.json")
@@ -278,3 +300,4 @@ def get_guide():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+

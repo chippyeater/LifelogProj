@@ -1,0 +1,73 @@
+{
+  "game_levels": [
+    {
+      "structure_id": "structure_001",
+      "structure_name": "逛超市",
+      "structure_index": 1,
+      "narratives": [
+        {
+          "narrative_id": "narrative_001_001",
+          "narrative_name": "进入超市",
+          "narrative_index": 1,
+          "items": []
+        },
+        {
+          "narrative_id": "narrative_001_002",
+          "narrative_name": "挑选蔬菜和水果",
+          "narrative_index": 2,
+          "items": [
+            {
+              "item_id": "item_001_002_001",
+              "item_name": "茄子",
+              "item_index": 1
+            },
+            {
+              "item_id": "item_001_002_002",
+              "item_name": "橙子",
+              "item_index": 2
+            }
+          ]
+        },
+        {
+          "narrative_id": "narrative_001_003",
+          "narrative_name": "挑选饮料",
+          "narrative_index": 3,
+          "items": [
+            {
+              "item_id": "item_001_003_001",
+              "item_name": "牛奶",
+              "item_index": 1
+            },
+            {
+              "item_id": "item_001_003_002",
+              "item_name": "芬达",
+              "item_index": 2
+            }
+          ]
+        },
+        {
+          "narrative_id": "narrative_001_004",
+          "narrative_name": "挑选零食",
+          "narrative_index": 4,
+          "items": [
+            {
+              "item_id": "item_001_004_001",
+              "item_name": "泡面",
+              "item_index": 1
+            },
+            {
+              "item_id": "item_001_004_002",
+              "item_name": "饼干",
+              "item_index": 2
+            },
+            {
+              "item_id": "item_001_004_003",
+              "item_name": "瓜子",
+              "item_index": 3
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
