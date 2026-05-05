@@ -1,5 +1,7 @@
 import unittest
 import json
+import os
+import shutil
 from unittest.mock import patch
 
 from tests.test_support import import_with_stubs
@@ -14,6 +16,10 @@ class _FakeRequest:
     def __init__(self):
         self.args = _FakeRequestArgs()
         self.host_url = "http://localhost:8000/"
+        self._json = None
+
+    def get_json(self, silent=False):
+        return self._json
 
 
 class _FakeResponse:
@@ -59,6 +65,7 @@ class _FakeClient:
         route, _, query = path.partition("?")
         api_server.request.args = _FakeRequestArgs()
         api_server.request.host_url = "http://localhost:8000/"
+        api_server.request._json = None
         if query:
             for pair in query.split("&"):
                 if not pair:
@@ -68,6 +75,25 @@ class _FakeClient:
         if hasattr(self.app, "_before_request"):
             self.app._before_request()
         result = self.app._routes[("GET", route)]()
+        if isinstance(result, tuple):
+            payload, status_code = result
+            return _FakeResponse(payload.get_json(), status_code)
+        return _FakeResponse(result.get_json(), 200)
+
+    def post(self, path, json=None):
+        route, _, query = path.partition("?")
+        api_server.request.args = _FakeRequestArgs()
+        api_server.request.host_url = "http://localhost:8000/"
+        api_server.request._json = json
+        if query:
+            for pair in query.split("&"):
+                if not pair:
+                    continue
+                key, _, value = pair.partition("=")
+                api_server.request.args[key] = value
+        if hasattr(self.app, "_before_request"):
+            self.app._before_request()
+        result = self.app._routes[("POST", route)]()
         if isinstance(result, tuple):
             payload, status_code = result
             return _FakeResponse(payload.get_json(), status_code)
@@ -222,6 +248,28 @@ class ApiServerTest(unittest.TestCase):
         data = response.get_json()
         self.assertFalse(data["ready"])
         self.assertEqual(data["asset_validation"]["missing_assets"], ["frames/missing.jpg"])
+
+    def test_post_and_get_recall_report(self):
+        payload = {
+            "report_version": 1,
+            "task_context": {"foo": "bar"},
+            "user_performance": {"error_trial": 2},
+        }
+
+        with patch.object(api_server, "OUTPUT_ROOT", self._tmp_dir()):
+            post_response = self.client.post("/api/recall-report?user=001", json=payload)
+            self.assertEqual(post_response.status_code, 200)
+            self.assertTrue(post_response.get_json()["ok"])
+
+            get_response = self.client.get("/api/recall-report?user=001")
+            self.assertEqual(get_response.status_code, 200)
+            self.assertEqual(get_response.get_json()["task_context"]["foo"], "bar")
+
+    def _tmp_dir(self):
+        path = os.path.join(os.getcwd(), ".tmp_test_api_server")
+        shutil.rmtree(path, ignore_errors=True)
+        os.makedirs(path, exist_ok=True)
+        return path
 
 
 if __name__ == "__main__":

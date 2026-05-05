@@ -22,6 +22,7 @@ DB_PATH = os.getenv("PIPELINE_DB_PATH", os.path.join(APP_DIR, "lifelog.db"))
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
 TASK_STATUS_FILENAME = "status.json"
+RECALL_REPORT_FILENAME = "recall_report.json"
 
 
 @app.before_request
@@ -59,6 +60,10 @@ def _resolve_paths(user_id: str) -> Tuple[str, str, str]:
 
 def _resolve_status_path(user_id: str) -> str:
     return os.path.join(_resolve_output_dir(user_id), TASK_STATUS_FILENAME)
+
+
+def _resolve_recall_report_path(user_id: str) -> str:
+    return os.path.join(_resolve_output_dir(user_id), RECALL_REPORT_FILENAME)
 
 
 def _safe_name_component(value: Optional[str], fallback: str) -> str:
@@ -494,6 +499,44 @@ def get_job_status():
 
     resolved_video_name = rec.get("video_name") or video_name
     return jsonify(_build_job_status_payload(base_url, user_id, resolved_video_name, rec))
+
+
+@app.post("/api/recall-report")
+def post_recall_report():
+    user_id = request.args.get("user", "default").strip() or "default"
+    logger.info("POST /api/recall-report user=%s", user_id)
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "json body is required"}), 400
+
+    out_dir = _resolve_output_dir(user_id)
+    os.makedirs(out_dir, exist_ok=True)
+    report_path = _resolve_recall_report_path(user_id)
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "ok": True,
+        "user": user_id,
+        "path": report_path,
+    })
+
+
+@app.get("/api/recall-report")
+def get_recall_report():
+    user_id = request.args.get("user", "default").strip() or "default"
+    logger.info("GET /api/recall-report user=%s", user_id)
+
+    report_path = _resolve_recall_report_path(user_id)
+    if not os.path.exists(report_path):
+        return jsonify({"ok": False, "error": "recall_report.json not found"}), 404
+
+    with open(report_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return _json_response(data)
 
 
 @app.post("/api/tts")

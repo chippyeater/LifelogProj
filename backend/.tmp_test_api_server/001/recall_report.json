@@ -1,0 +1,9 @@
+{
+  "report_version": 1,
+  "task_context": {
+    "foo": "bar"
+  },
+  "user_performance": {
+    "error_trial": 2
+  }
+}
