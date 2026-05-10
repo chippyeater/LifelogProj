@@ -31,18 +31,103 @@ STAGE_NAME_BY_NUMBER = {
     2: "stage2_event_rebuild",
     3: "stage3_detail_generate",
 }
+TASK_STATUS_FILENAME = "status.json"
+
+
+def _utc_now_iso() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _status_path(output_root: str, user_id: str) -> str:
+    return os.path.join(output_root, user_id, TASK_STATUS_FILENAME)
+
+
+def _default_status_pipeline_state() -> dict:
+    return {
+        "events": "pending",
+        "entities": "pending",
+        "frames": "pending",
+        "aigc": "pending",
+        "unity": "pending",
+        "last_error": None,
+    }
+
+
+def _read_status_doc(output_root: str, user_id: str) -> dict:
+    path = _status_path(output_root, user_id)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_status_doc(output_root: str, user_id: str, payload: dict) -> None:
+    path = _status_path(output_root, user_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _update_status_doc(
+    *,
+    output_root: str,
+    user_id: str,
+    video_name: str,
+    task_id: str,
+    status: str | None = None,
+    ready: bool | None = None,
+    progress: int | None = None,
+    current_step: str | None = None,
+    error: str | None = None,
+    pipeline_state: dict | None = None,
+) -> dict:
+    doc = _read_status_doc(output_root, user_id)
+    merged_pipeline_state = _default_status_pipeline_state()
+    merged_pipeline_state.update(doc.get("pipeline_state") or {})
+    merged_pipeline_state.update(pipeline_state or {})
+
+    payload = {
+        "ok": True,
+        "user": user_id,
+        "task_id": doc.get("task_id") or task_id,
+        "job_id": doc.get("job_id") or task_id,
+        "video": doc.get("video") or video_name,
+        "status": status or doc.get("status") or "processing",
+        "ready": ready if ready is not None else bool(doc.get("ready", False)),
+        "progress": progress if progress is not None else int(doc.get("progress") or 0),
+        "current_step": current_step or doc.get("current_step") or "等待处理",
+        "error": error if error is not None else doc.get("error"),
+        "pipeline_state": merged_pipeline_state,
+        "updated_at": _utc_now_iso(),
+    }
+    _write_status_doc(output_root, user_id, payload)
+    return payload
 
 
 def _merge_pipeline_state(
     db_path: str,
     user_id: str,
     video_name: str,
+    output_root: str | None = None,
+    task_id: str | None = None,
     **updates,
 ) -> dict:
     # 增量更新 pipeline_state，避免每次调用都覆盖其他阶段状态
     state = get_pipeline_state(db_path, user_id, video_name)
     state.update({k: v for k, v in updates.items() if v is not None})
     set_pipeline_state(db_path, user_id, video_name, state)
+    if output_root and task_id:
+        _update_status_doc(
+            output_root=output_root,
+            user_id=user_id,
+            video_name=video_name,
+            task_id=task_id,
+            pipeline_state=state,
+        )
     return state
 
 
@@ -52,18 +137,39 @@ def _mark_pipeline_failure(
     video_name: str,
     stage_key: str | None,
     exc: Exception,
+    output_root: str | None = None,
+    task_id: str | None = None,
 ) -> dict:
     # 统一记录失败阶段与错误信息，供 API/Unity 查询
     updates = {"last_error": str(exc) or exc.__class__.__name__}
     if stage_key:
         updates[stage_key] = "failed"
-    state = _merge_pipeline_state(db_path, user_id, video_name, **updates)
+    state = _merge_pipeline_state(
+        db_path,
+        user_id,
+        video_name,
+        output_root=output_root,
+        task_id=task_id,
+        **updates,
+    )
     upsert_user_video(
         db_path,
         user_id=user_id,
         video_name=video_name,
         fields={"status": "failed"},
     )
+    if output_root and task_id:
+        _update_status_doc(
+            output_root=output_root,
+            user_id=user_id,
+            video_name=video_name,
+            task_id=task_id,
+            status="failed",
+            ready=False,
+            error=updates["last_error"],
+            pipeline_state=state,
+            current_step="处理失败",
+        )
     return state
 
 
@@ -402,6 +508,8 @@ def main() -> None:
 
     # 解析视频路径与数据库记录
     video_name = os.path.basename(args.video)
+    status_doc = _read_status_doc(args.output_root, args.user)
+    task_id = status_doc.get("task_id") or os.path.splitext(video_name)[0]
     source_video_path = os.path.join("videos", video_name)
     cache_manifest = cache_manager.build_manifest(
         user_id=args.user,
@@ -413,6 +521,28 @@ def main() -> None:
     if args.pipeline_mode == "staged":
         logger.info("Pipeline start stage: %s (%s)", args.start_stage, STAGE_NAME_BY_NUMBER[args.start_stage])
     current_stage_key = "events"
+
+    def update_status(
+        *,
+        status: str | None = None,
+        ready: bool | None = None,
+        progress: int | None = None,
+        current_step: str | None = None,
+        error: str | None = None,
+        pipeline_state: dict | None = None,
+    ) -> dict:
+        return _update_status_doc(
+            output_root=args.output_root,
+            user_id=args.user,
+            video_name=video_name,
+            task_id=task_id,
+            status=status,
+            ready=ready,
+            progress=progress,
+            current_step=current_step,
+            error=error,
+            pipeline_state=pipeline_state,
+        )
 
     def _compress_video(input_path: str, output_path: str, width: int, height: int) -> None:
         ffmpeg = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
@@ -462,12 +592,20 @@ def main() -> None:
             db_path,
             args.user,
             video_name,
+            output_root=args.output_root,
+            task_id=task_id,
             events="pending",
             entities="pending",
             frames="pending",
             aigc="pending",
             unity="pending",
             last_error=None,
+        )
+        update_status(
+            status="processing",
+            ready=False,
+            progress=5,
+            current_step="正在启动处理任务",
         )
 
         # 执行分析或加载缓存
@@ -545,6 +683,12 @@ def main() -> None:
                 location=args.location,
                 video_length=video_length,
             )
+            update_status(
+                status="processing",
+                ready=False,
+                progress=10,
+                current_step="开始提取 full_context",
+            )
 
             if args.pipeline_mode == "full_context":
                 full_context = video_processor.analyze_full_context(ctx)
@@ -552,8 +696,16 @@ def main() -> None:
                     db_path,
                     args.user,
                     video_name,
+                    output_root=args.output_root,
+                    task_id=task_id,
                     events="done",
                     entities="done",
+                )
+                update_status(
+                    status="processing",
+                    ready=False,
+                    progress=40,
+                    current_step="full_context 提取完成",
                 )
             else:
                 # staged 模式先落结构化阶段缓存，供单阶段调试和恢复
@@ -604,6 +756,8 @@ def main() -> None:
                 db_path,
                 args.user,
                 video_name,
+                output_root=args.output_root,
+                task_id=task_id,
                 events="done",
             )
             if _should_stop_after_stage(2, args.end_stage):
@@ -639,6 +793,8 @@ def main() -> None:
                 db_path,
                 args.user,
                 video_name,
+                output_root=args.output_root,
+                task_id=task_id,
                 entities="done",
             )
             if _should_stop_after_stage(3, args.end_stage):
@@ -666,6 +822,8 @@ def main() -> None:
                 db_path,
                 args.user,
                 video_name,
+                output_root=args.output_root,
+                task_id=task_id,
                 events="done",
                 entities="done",
             )
@@ -696,6 +854,12 @@ def main() -> None:
         current_stage_key = "frames"
         if args.pipeline_mode == "full_context" or args.start_stage <= 2:
             # 旧链路的抽帧/AIGC 仍然直接消费 full_context
+            update_status(
+                status="processing",
+                ready=False,
+                progress=50,
+                current_step="正在抽取参考帧",
+            )
             if args.force_regenerate_images:
                 _clear_image_paths(full_context)
             frames_dir = os.path.join(user_dir, "frames")
@@ -704,12 +868,27 @@ def main() -> None:
                 db_path,
                 args.user,
                 video_name,
+                output_root=args.output_root,
+                task_id=task_id,
                 frames="done",
+            )
+            update_status(
+                status="processing",
+                ready=False,
+                progress=60,
+                current_step="参考帧抽取完成",
             )
 
             current_stage_key = "aigc"
+            update_status(
+                status="processing",
+                ready=False,
+                progress=65,
+                current_step="开始生成 AIGC 增强图",
+            )
             volc_access_key = os.getenv("VOLC_ACCESS_KEY")
             volc_secret_key = os.getenv("VOLC_SECRET_KEY")
+            aigc_state = "skipped"
             if volc_access_key and volc_secret_key:
                 generator = VolcEngineAIGCGenerator(
                     access_key=volc_access_key,
@@ -732,11 +911,20 @@ def main() -> None:
                     frames_dir=frames_dir,
                     force=args.force_regenerate_images,
                 )
+                aigc_state = "done"
             _merge_pipeline_state(
                 db_path,
                 args.user,
                 video_name,
-                aigc="done",
+                output_root=args.output_root,
+                task_id=task_id,
+                aigc=aigc_state,
+            )
+            update_status(
+                status="processing",
+                ready=False,
+                progress=75,
+                current_step="AIGC 阶段完成" if aigc_state == "done" else "AIGC 已跳过",
             )
 
             with open(extracted_context_path, "w", encoding="utf-8") as f:
@@ -782,6 +970,12 @@ def main() -> None:
         current_stage_key = "unity"
         if args.pipeline_mode == "full_context" or args.start_stage <= 3:
             # 生成Unity侧的GameMeta/GameFlow
+            update_status(
+                status="processing",
+                ready=False,
+                progress=85,
+                current_step="开始生成 Unity JSON",
+            )
             game_meta, game_flow = generate_game_meta_flow(
                 input_path=extracted_context_path,
                 output_dir=user_dir,
@@ -815,6 +1009,12 @@ def main() -> None:
                 files=[p for p in [stage3_output and cache_manager.stage_file("stage3_detail_generate", "stage3_detail_generate_output.json"), stage3_meta_path, stage3_flow_path] if p],
             )
             cache_manager.save_manifest(cache_manifest)
+            update_status(
+                status="processing",
+                ready=False,
+                progress=95,
+                current_step="资源校验完成",
+            )
         else:
             game_meta = _load_json_file(cache_manager.stage_file("stage3_detail_generate", "GameMeta.json"))
             game_flow = _load_json_file(cache_manager.stage_file("stage3_detail_generate", "GameFlow.json"))
@@ -822,6 +1022,8 @@ def main() -> None:
                 db_path,
                 args.user,
                 video_name,
+                output_root=args.output_root,
+                task_id=task_id,
                 unity="done",
             )
 
@@ -843,10 +1045,26 @@ def main() -> None:
             db_path,
             args.user,
             video_name,
+            output_root=args.output_root,
+            task_id=task_id,
             unity="done",
         )
+        update_status(
+            status="all_ready",
+            ready=True,
+            progress=100,
+            current_step="处理完成",
+        )
     except Exception as exc:
-        _mark_pipeline_failure(db_path, args.user, video_name, current_stage_key, exc)
+        _mark_pipeline_failure(
+            db_path,
+            args.user,
+            video_name,
+            current_stage_key,
+            exc,
+            output_root=args.output_root,
+            task_id=task_id,
+        )
         logger.exception("Pipeline failed at stage=%s", current_stage_key)
         raise
 

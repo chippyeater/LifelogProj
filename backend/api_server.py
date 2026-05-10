@@ -66,6 +66,10 @@ def _resolve_recall_report_path(user_id: str) -> str:
     return os.path.join(_resolve_output_dir(user_id), RECALL_REPORT_FILENAME)
 
 
+def _utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def _safe_name_component(value: Optional[str], fallback: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -99,6 +103,35 @@ def _build_current_step(pipeline_state: Dict[str, Any], status: str) -> str:
     if status == "context_extracted":
         return "正在生成 Unity 数据"
     return "等待处理"
+
+
+def _status_json_payload(
+    *,
+    user_id: str,
+    task_id: str,
+    job_id: str,
+    video_name: str,
+    status: str,
+    ready: bool,
+    progress: int,
+    current_step: str,
+    pipeline_state: Dict[str, Any],
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "user": user_id,
+        "task_id": task_id,
+        "job_id": job_id,
+        "video": video_name,
+        "status": status,
+        "ready": ready,
+        "progress": progress,
+        "current_step": current_step,
+        "error": error,
+        "pipeline_state": pipeline_state,
+        "updated_at": _utc_now_iso(),
+    }
 
 
 def _read_status_json(user_id: str) -> Dict[str, Any]:
@@ -286,6 +319,21 @@ def _default_pipeline_state() -> Dict[str, Any]:
     }
 
 
+def _paths_record_for_user(user_id: str, video_name: str = "") -> Dict[str, Any]:
+    extracted_path, game_meta_path, game_flow_path = _resolve_paths(user_id)
+    return {
+        "video_name": video_name,
+        "status": "pending",
+        "video_url": "",
+        "extracted_context_path": extracted_path if os.path.exists(extracted_path) else "",
+        "gamemeta_path": game_meta_path if os.path.exists(game_meta_path) else "",
+        "gameflow_path": game_flow_path if os.path.exists(game_flow_path) else "",
+        "subevent_count": None,
+        "processed_at": None,
+        "updated_at": None,
+    }
+
+
 def _build_asset_validation(user_id: str, rec: Dict[str, Any]) -> Dict[str, Any]:
     if not rec.get("gamemeta_path") or not rec.get("gameflow_path"):
         return {"ok": False, "asset_count": 0, "missing_assets": [], "non_ascii_assets": []}
@@ -327,6 +375,7 @@ def _build_job_status_payload(base_url: str, user_id: str, video_name: str, rec:
         "ok": True,
         "user": user_id,
         "task_id": task_id,
+        "job_id": status_doc.get("job_id") or task_id,
         "video": video_name,
         "status": status,
         "progress": progress,
@@ -342,6 +391,54 @@ def _build_job_status_payload(base_url: str, user_id: str, video_name: str, rec:
         "subevent_count": rec.get("subevent_count"),
         "processed_at": rec.get("processed_at"),
         "updated_at": rec.get("updated_at"),
+    }
+
+
+def _build_job_status_from_status_doc(base_url: str, user_id: str, status_doc: Dict[str, Any]) -> Dict[str, Any]:
+    video_name = status_doc.get("video") or ""
+    pipeline_state = dict(_default_pipeline_state())
+    pipeline_state.update(status_doc.get("pipeline_state") or {})
+
+    status = status_doc.get("status") or "pending"
+    rec = _paths_record_for_user(user_id, video_name)
+    asset_validation = _build_asset_validation(user_id, rec)
+    ready = bool(status_doc.get("ready")) and asset_validation["ok"]
+    if status == "all_ready" and asset_validation["ok"]:
+        ready = True
+
+    error = status_doc.get("error") or pipeline_state.get("last_error")
+    progress = status_doc.get("progress")
+    if not isinstance(progress, int):
+        progress = _pipeline_progress_percent(pipeline_state, status)
+    current_step = status_doc.get("current_step") or _build_current_step(pipeline_state, status)
+
+    if ready:
+        status = "all_ready"
+        progress = 100
+        current_step = "处理完成"
+    elif status == "failed" and not error:
+        error = "pipeline failed"
+
+    return {
+        "ok": True,
+        "user": user_id,
+        "task_id": status_doc.get("task_id") or "",
+        "job_id": status_doc.get("job_id") or status_doc.get("task_id") or "",
+        "video": video_name,
+        "status": status,
+        "progress": progress,
+        "current_step": current_step,
+        "ready": ready,
+        "pipeline_state": pipeline_state,
+        "error": error,
+        "asset_validation": asset_validation,
+        "video_url": "",
+        "extracted_context_url": _build_api_url(base_url, f"/api/context?user={user_id}") if rec.get("extracted_context_path") else "",
+        "game_meta_url": _build_api_url(base_url, f"/api/game-meta?user={user_id}") if rec.get("gamemeta_path") else "",
+        "game_flow_url": _build_api_url(base_url, f"/api/game-flow?user={user_id}") if rec.get("gameflow_path") else "",
+        "subevent_count": None,
+        "processed_at": None,
+        "updated_at": status_doc.get("updated_at"),
     }
 
 
@@ -393,17 +490,18 @@ def create_process_task():
     )
     _write_status_json(
         user_id,
-        {
-            "user": user_id,
-            "task_id": task_id,
-            "job_id": job_id,
-            "video": video_name,
-            "status": "processing",
-            "current_step": "正在分析视频",
-            "progress": 5,
-            "error": None,
-            "shopping_list": shopping_list_raw,
-        },
+        _status_json_payload(
+            user_id=user_id,
+            task_id=task_id,
+            job_id=job_id,
+            video_name=video_name,
+            status="processing",
+            ready=False,
+            progress=5,
+            current_step="正在分析视频",
+            pipeline_state=_default_pipeline_state(),
+            error=None,
+        ),
     )
 
     _launch_pipeline_process(
@@ -474,11 +572,17 @@ def get_context():
 
 @app.get("/api/job-status")
 def get_job_status():
-    # 查询某个视频任务的处理状态，供 Unity 轮询
+    # 查询当前视频处理进度
     base_url = _get_base_url()
     user_id = request.args.get("user", "default").strip() or "default"
     video_name = (request.args.get("video") or "").strip()
     logger.info("GET /api/job-status user=%s video=%s", user_id, video_name or "<latest>")
+
+    status_doc = _read_status_json(user_id)
+    if status_doc:
+        status_video = (status_doc.get("video") or "").strip()
+        if not video_name or not status_video or status_video == video_name:
+            return jsonify(_build_job_status_from_status_doc(base_url, user_id, status_doc))
 
     rec = get_video_record(DB_PATH, user_id, video_name) if video_name else get_latest_video_record(DB_PATH, user_id)
     if not rec:
@@ -486,6 +590,7 @@ def get_job_status():
             "ok": False,
             "user": user_id,
             "task_id": "",
+            "job_id": "",
             "video": video_name,
             "status": "not_found",
             "progress": 0,

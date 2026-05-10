@@ -143,6 +143,50 @@ class ApiServerTest(unittest.TestCase):
     def setUp(self):
         self.client = api_server.app.test_client()
 
+    def test_job_status_prefers_status_json(self):
+        tmp_root = self._tmp_dir()
+        user_dir = os.path.join(tmp_root, "001")
+        os.makedirs(user_dir, exist_ok=True)
+        with open(os.path.join(user_dir, "status.json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "ok": True,
+                    "user": "001",
+                    "task_id": "task_json",
+                    "job_id": "task_json",
+                    "video": "from_status.mp4",
+                    "status": "processing",
+                    "ready": False,
+                    "progress": 65,
+                    "current_step": "开始生成 AIGC 增强图",
+                    "error": None,
+                    "pipeline_state": {
+                        "events": "done",
+                        "entities": "done",
+                        "frames": "done",
+                        "aigc": "pending",
+                        "unity": "pending",
+                        "last_error": None,
+                    },
+                    "updated_at": "2026-05-06T10:00:00Z",
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        with patch.object(api_server, "OUTPUT_ROOT", tmp_root):
+            response = self.client.get("/api/job-status?user=001")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["task_id"], "task_json")
+        self.assertEqual(data["job_id"], "task_json")
+        self.assertEqual(data["video"], "from_status.mp4")
+        self.assertEqual(data["progress"], 65)
+        self.assertEqual(data["current_step"], "开始生成 AIGC 增强图")
+        self.assertEqual(data["pipeline_state"]["frames"], "done")
+
     def test_job_status_uses_latest_record_when_video_missing(self):
         record = {
             "video_name": "001.mp4",

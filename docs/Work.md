@@ -1,362 +1,1146 @@
-# Work
+下面这版可以直接替换仓库根目录的 `readme.md`。
 
-## 1. 当前后端真实入口
+````markdown
+# LifelogProj
 
-当前完整视频处理入口不是 HTTP 接口，而是本地 CLI：
+LifelogProj 是一个实验用的生活记录回忆辅助系统后端项目。它将第一视角生活视频处理成结构化回忆材料，并生成 Unity 平板端可读取的回忆任务数据。
+
+当前系统主要服务于以下实验闭环：
+
+```text
+医生网页端创建活动任务
+→ 上传第一视角视频
+→ Flask API 启动后端处理
+→ run_pipeline.py 分析视频
+→ 输出 extracted_context.json / GameMeta.json / GameFlow.json
+→ Unity 平板端拉取任务数据
+→ 老人完成回忆任务
+→ Unity 保存回忆表现日志
+→ 医生网页端查看处理结果与回忆表现
+````
+
+本项目当前重点不是正式部署，而是支持实验流程跑通。
+
+---
+
+## 1. 当前系统架构
+
+```text
+医生网页端
+  │
+  │ POST /api/tasks/process
+  ▼
+Flask API: api_server.py
+  │
+  │ subprocess 启动
+  ▼
+run_pipeline.py
+  │
+  ├─ 视频理解与上下文抽取
+  ├─ 参考帧抽取
+  ├─ AIGC 线索图生成（可选）
+  ├─ Unity JSON 生成
+  ▼
+output/{user}/
+  ├─ extracted_context.json
+  ├─ GameMeta.json
+  ├─ GameFlow.json
+  ├─ frames/
+  ├─ enhanced/
+  ├─ option_images/
+  └─ media/
+       ├─ audio/
+       └─ video/
+
+Unity 平板端
+  │
+  ├─ GET /api/job-status?user={user}
+  ├─ GET /api/game-meta?user={user}
+  ├─ GET /api/game-flow?user={user}
+  └─ GET /assets/{user}/{relativePath}
+```
+
+关键判断：
+
+* 完整视频处理入口仍然是 `run_pipeline.py`
+* 网页端通过 `POST /api/tasks/process` 包装 CLI 处理流程
+* Unity 不直接跑视频处理，只读取后端生成好的 `GameMeta.json` 和 `GameFlow.json`
+* 医生网页端的处理结果预览应主要读取 `/api/context`，即 `extracted_context.json`
+* `GameMeta.json` / `GameFlow.json` 是 Unity 运行格式，不适合作为医生网页端的主要展示结构
+
+---
+
+## 2. 当前目录结构
+
+```text
+LifelogProj/
+├─ readme.md
+├─ api_server.py                 # Flask API 服务入口
+├─ run_pipeline.py               # 视频处理主流水线入口
+├─ make_context.py               # 视频理解、上下文构建、抽帧、线索增强
+├─ bailian_video_processor.py    # 阿里云百炼视频理解适配层
+├─ generate_unity_json.py        # extracted_context -> GameMeta/GameFlow
+├─ clue_aigc_generator.py        # 火山引擎图像生成封装
+├─ llm_client.py                 # SiliconFlow LLM 封装
+├─ db.py                         # SQLite 状态记录
+├─ my_basics.py                  # 基础数据结构与 JSON 工具
+├─ strategy.py                   # 回忆引导策略模块，当前不属于主流水线必经路径
+├─ tencent_cos_uploader.py       # 腾讯 COS 上传工具，当前非核心流程
+├─ twelvelabs_processor.py       # 历史/备用处理器
+├─ prompts/                      # Prompt 模板
+├─ examples/                     # 示例数据
+├─ videos/                       # 输入视频目录
+├─ output/                       # 输出目录，不应提交 GitHub
+├─ requirements.txt
+├─ .env                          # 本地环境变量，不应提交 GitHub
+└─ lifelog.db                    # 本地 SQLite 数据库，不应提交 GitHub
+```
+
+如果仓库中后续加入医生网页端，建议放在：
+
+```text
+frontend/
+```
+
+如果仓库中后续加入 Unity 工程，建议明确放在：
+
+```text
+unity/
+```
+
+当前后端不依赖前端项目存在。
+
+---
+
+## 3. 环境准备
+
+### Python 版本
+
+建议使用：
+
+```text
+Python 3.12
+```
+
+### 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+如果需要使用 `/api/tts`：
+
+```bash
+pip install edge-tts
+```
+
+### 必要工具
+
+视频压缩、抽帧、音频/视频片段导出依赖：
+
+```text
+ffmpeg
+ffprobe
+```
+
+可通过环境变量指定路径：
+
+```text
+FFMPEG_BIN
+FFPROBE_BIN
+```
+
+---
+
+## 4. 环境变量
+
+项目通过 `.env` 或系统环境变量读取配置。
+
+### 百炼视频理解
+
+```text
+BAILIAN_API_KEY
+DASHSCOPE_API_KEY
+BAILIAN_BASE_URL
+BAILIAN_MODEL
+BAILIAN_MAX_TOKENS
+BAILIAN_TEMPERATURE
+BAILIAN_INPUT_MODE
+BAILIAN_UPLOAD_API_URL
+BAILIAN_UPLOAD_TEMP
+BAILIAN_PARSE_RETRIES
+```
+
+### 火山引擎 AIGC 图像生成
+
+```text
+VOLC_ACCESS_KEY
+VOLC_SECRET_KEY
+```
+
+未配置时，不应依赖 AIGC 图增强功能。
+
+### SiliconFlow
+
+```text
+SILICONFLOW_API_KEY
+SILICONFLOW_MODEL
+SILICONFLOW_LOG_PATH
+```
+
+主要用于干扰项生成、翻译等文本任务。
+
+### API 服务
+
+```text
+PORT
+API_BASE_URL
+PIPELINE_DB_PATH
+```
+
+默认端口：
+
+```text
+8000
+```
+
+---
+
+## 5. 最小手动运行流程
+
+### 1. 放入视频
+
+将视频放入：
+
+```text
+videos/
+```
+
+例如：
+
+```text
+videos/001.mp4
+```
+
+### 2. 运行完整 pipeline
 
 ```bash
 python run_pipeline.py --user 001 --video 001.mp4 --pipeline-mode full_context
 ```
 
-真实入口代码在：
+常用参数：
 
-- [run_pipeline.py](e:/VSCodeProjects/LifelogProj/run_pipeline.py)
+```bash
+python run_pipeline.py \
+  --user 001 \
+  --video 001.mp4 \
+  --pipeline-mode full_context \
+  --activity 逛超市 \
+  --people 我 \
+  --time 2026年02月26日22:30 \
+  --location 超市
+```
 
-当前 `api_server.py` 只提供读取型接口：
+当前第一版主要使用 `full_context` 模式。
 
-- `/api/job-status`
-- `/api/context`
-- `/api/game-meta`
-- `/api/game-flow`
-- `/assets/<user>/<path>`
-- `/api/tts`
+`staged` / `pipeline_cache` 更适合开发调试，不建议先暴露给医生网页端。
 
-也就是说：
+---
 
-- 现在“处理视频”靠脚本
-- 现在“给 Unity/网页端取结果”靠 HTTP
+## 6. 输出目录
 
-## 2. HTTP 任务接口
+一次处理完成后，默认输出：
 
-已新增：
+```text
+output/{user}/
+├─ extracted_context.json
+├─ GameMeta.json
+├─ GameFlow.json
+├─ status.json
+├─ logs/
+├─ frames/
+├─ enhanced/
+├─ option_images/
+├─ media/
+│  ├─ audio/
+│  └─ video/
+├─ compressed/
+└─ tts/
+```
+
+核心文件：
+
+| 文件                       | 用途                      |
+| ------------------------ | ----------------------- |
+| `extracted_context.json` | 视频理解后的活动、子事件、实体、线索、细节问题 |
+| `GameMeta.json`          | Unity 游戏元信息             |
+| `GameFlow.json`          | Unity 游戏流程              |
+| `status.json`            | 网页端/Unity 可读的简化任务状态     |
+| `frames/`                | 原视频参考帧                  |
+| `enhanced/`              | AIGC 增强图                |
+| `option_images/`         | 选项图                     |
+| `media/audio/`           | 音频片段                    |
+| `media/video/`           | 视频片段                    |
+| `tts/`                   | TTS 缓存                  |
+
+---
+
+## 7. 启动 API 服务
+
+```bash
+python api_server.py
+```
+
+默认监听：
+
+```text
+http://127.0.0.1:8000
+```
+
+健康检查：
+
+```http
+GET http://127.0.0.1:8000/api/health
+```
+
+返回：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
+## 8. 医生网页端接口
+
+### 8.1 上传视频并启动处理
 
 ```http
 POST /api/tasks/process
 ```
 
-当前行为：
+请求格式：
 
-1. 把上传视频保存到 `videos/{video_name}`
-2. 写入数据库记录
-3. 生成 `task_id` / `job_id`
-4. 启动后台子进程执行：
-
-```bash
-python run_pipeline.py --user {user} --video {video_name} --pipeline-mode full_context
+```text
+multipart/form-data
 ```
 
-5. 立即返回 `job_id`
+字段：
 
-当前接口形态是 `multipart/form-data`，支持：
+| 字段                | 类型     | 说明                     |
+| ----------------- | ------ | ---------------------- |
+| `video`           | File   | 第一视角视频                 |
+| `user`            | string | 用户编号                   |
+| `userName`        | string | 用户姓名，后端可以先忽略           |
+| `activity`        | string | 活动主题，例如“逛超市”           |
+| `people`          | string | 参与人物，例如“我”             |
+| `time`            | string | 活动时间                   |
+| `location`        | string | 活动地点                   |
+| `shopping_list`   | string | JSON.stringify 后的购物清单  |
+| `taskDescription` | string | 任务说明，后端可以先忽略           |
+| `pipeline_mode`   | string | 当前建议固定为 `full_context` |
 
-- `video`
-- `user`
-- `activity`
-- `people`
-- `time`
-- `location`
-- `shopping_list`
+`shopping_list` 建议结构：
 
-说明：
+```json
+[
+  {
+    "name": "牛奶",
+    "quantity": 1,
+    "unit": "盒"
+  },
+  {
+    "name": "苹果",
+    "quantity": 3,
+    "unit": "个"
+  }
+]
+```
 
-- 目前 `shopping_list` 只接收并写入简单状态文件，未进入 `run_pipeline.py` 主处理逻辑
-- 后端内部仍然复用现有 `run_pipeline.py`
+注意：
 
-## 3. 网页端是否可以只围绕三个文件工作
+* `shopping_list` 只作为任务上下文和实体筛选弱约束
+* 不应直接作为正确答案来源
+* 不应直接把清单数量当作细节题答案
+* 数量题只有在视频中能观察或推断实际数量时才生成
 
-可以，而且这是当前最合适的最小方案。
-
-网页端目前完全可以只围绕这三个产物工作：
-
-- `output/{user}/extracted_context.json`
-- `output/{user}/GameMeta.json`
-- `output/{user}/GameFlow.json`
-
-理由：
-
-1. `full_context` 是当前主链路
-2. `GameMeta.json` / `GameFlow.json` 是 Unity 最终消费结果
-3. `extracted_context.json` 是医生/护工网页端最适合查看和审核的中间语义结果
-4. `staged cache` 现在更像开发调试资产，不适合先暴露给业务网页端
-
-所以网页端第一版完全可以：
-
-- 不接 `pipeline_cache`
-- 不做复杂分阶段恢复
-- 只展示和管理最终三份文件
-
-## 4. /api/job-status 现在能不能给网页端用
-
-能用，而且已经补了网页端友好字段。
-
-当前 `/api/job-status` 已经能返回：
-
-- `status`
-- `progress`
-- `ready`
-- `pipeline_state`
-- `error`
-- `game_meta_url`
-- `game_flow_url`
-- `extracted_context_url`
-
-它当前更偏“Unity 轮询接口”，不是“网页任务面板接口”。
-
-当前会额外返回：
-
-- `task_id`
-- `current_step`
-
-当前返回示例结构：
+返回示例：
 
 ```json
 {
+  "ok": true,
   "user": "001",
   "task_id": "task_001_xxx",
+  "job_id": "task_001_xxx",
+  "video": "001_task_001_xxx_upload.mp4",
   "status": "processing",
   "ready": false,
-  "progress": 40,
+  "progress": 5,
   "current_step": "正在分析视频",
   "error": null
 }
 ```
 
-说明：
+---
 
-- Unity 仍然可以继续使用老字段
-- 网页端可以直接用新字段
+### 8.2 查询处理状态
 
-## 5. 简单状态文件
+```http
+GET /api/job-status?user=001
+```
 
-当前已引入简单状态文件方案。
-
-建议增加一个简单状态文件，例如：
+返回示例：
 
 ```json
 {
+  "ok": true,
+  "user": "001",
+  "task_id": "task_001",
+  "video": "001_task_001_upload.mp4",
   "status": "processing",
-  "current_step": "正在分析视频",
   "progress": 40,
+  "current_step": "正在分析视频细节",
+  "ready": false,
+  "pipeline_state": {
+    "events": "done",
+    "entities": "pending",
+    "frames": "pending",
+    "aigc": "pending",
+    "unity": "pending",
+    "last_error": null
+  },
   "error": null
 }
 ```
 
-当前路径：
+前端只应强依赖：
+
+```text
+ready
+status
+progress
+current_step
+error
+```
+
+`pipeline_state` 可以用于调试，不建议页面逻辑强依赖。
+
+---
+
+### 8.3 获取医生网页预览数据
+
+```http
+GET /api/context?user=001
+```
+
+返回：
+
+```text
+output/001/extracted_context.json
+```
+
+这是医生网页端“处理结果预览”的主数据源。
+
+真实结构示意：
+
+```json
+{
+  "activity": "逛超市",
+  "people": "我",
+  "time": "2026年02月26日22:30",
+  "location": "超市",
+  "source_video": "videos/005.mp4",
+  "activity_visual_clue": {
+    "frame": "00:00:05.000",
+    "description": "我们正在超市入口处挑选购物篮，准备开始购物",
+    "reference_frame_path": "frames/逛超市.jpg"
+  },
+  "events": {
+    "e1": {
+      "id": "e1",
+      "name": "进入超市并挑选商品",
+      "description": "我们穿过超市入口闸门后，进入生鲜区，浏览并挑选了多种水果和蔬菜。",
+      "start_time": "00:00:15.000",
+      "end_time": "00:01:05.000",
+      "scene_clues": [
+        {
+          "frame": "00:00:25.000",
+          "description": "货架上摆放着整齐的草莓、西瓜等水果",
+          "reference_frame_path": "frames/进入超市并挑选商品.jpg",
+          "enhanced_image_path": "enhanced/进入超市并挑选商品.jpg"
+        }
+      ],
+      "entities": [
+        {
+          "id": "o1",
+          "item_name": "小番茄",
+          "frame": "00:00:45.000",
+          "entity_clues": {
+            "visual": ["红色", "圆形", "透明塑料盒包装"],
+            "semantic": ["水果", "食材"]
+          },
+          "detail_pair": [
+            {
+              "question": "我们买了几盒小番茄？",
+              "correct_answer": "2盒",
+              "options": ["1盒", "2盒"]
+            }
+          ],
+          "reference_frame_path": "frames/小番茄.jpg",
+          "enhanced_image_path": "enhanced/小番茄.jpg"
+        }
+      ]
+    }
+  }
+}
+```
+
+前端读取方式：
+
+```text
+context.activity
+context.people
+context.time
+context.location
+Object.values(context.events)
+event.name
+event.description
+event.start_time
+event.end_time
+event.scene_clues
+event.entities
+entity.item_name
+entity.entity_clues.visual
+entity.entity_clues.semantic
+entity.detail_pair
+```
 
-- `output/{user}/status.json`
+不要使用旧结构：
 
-当前是最小实现，只按 `user` 维护一份。
+```text
+activity_theme
+sub_events
+key_objects
+object_details
+qa
+```
 
-后续如果要支持同一用户多任务并行，建议升级为：
+---
 
-- `output/{user}/{video_name}.status.json`
+### 8.4 获取 Unity 元信息
 
-或者数据库持久化任务表。
+```http
+GET /api/game-meta?user=001
+```
 
-## 6. Unity 现在请求的是哪个接口
+返回：
 
-Unity 当前主要请求的是：
+```json
+{
+  "game_levels": []
+}
+```
 
-1. `/api/job-status`
-2. `/api/game-meta`
-3. `/api/game-flow`
-4. `/assets/{user}/{relative_path}`
+注意：
 
-具体逻辑在：
+* 没有 `success`
+* 没有 `meta`
 
-- [LoginRemoteLoader.cs](F:/Unity/Projects/YTY/YTY/YTY/Assets/Scripts/Scene0/LoginRemoteLoader.cs)
+前端判断是否成功：
 
-当前链路是：
+```ts
+Boolean(gameMeta?.game_levels?.length)
+```
 
-1. 先轮询 `/api/job-status`
-2. `ready == true` 后再下载：
-   - `/api/game-meta?user=...`
-   - `/api/game-flow?user=...`
-3. 再根据 `GameFlow.json` 里的相对路径去请求：
-   - `/assets/{user}/frames/...`
-   - `/assets/{user}/option_images/...`
-   - `/assets/{user}/media/audio/...`
-   - `/assets/{user}/media/video/...`
+---
 
-所以答案是：
+### 8.5 获取 Unity 流程
 
-- Unity 不只是请求 `/api/game-meta` 和 `/api/game-flow`
-- Unity 的真正入口是 `/api/job-status`
+```http
+GET /api/game-flow?user=001
+```
 
-## 7. 网页端改造时对 Unity 的兼容要求
+返回：
 
-网页端接入后，需要保证 Unity 现有逻辑不变。
+```json
+{
+  "game_flow": []
+}
+```
 
-这意味着以下接口必须继续保留：
+注意：
 
-- `/api/job-status`
-- `/api/game-meta`
-- `/api/game-flow`
-- `/assets/{user}/{path}`
+* 没有 `success`
+* 没有 `flow`
 
-推荐做法不是改 Unity 接口，而是：
+前端判断是否成功：
 
-1. 新增 `POST /api/tasks/process`
-2. 后台继续跑 `run_pipeline.py`
-3. 继续产出：
-   - `output/{user}/extracted_context.json`
-   - `output/{user}/GameMeta.json`
-   - `output/{user}/GameFlow.json`
-4. `/api/job-status` 兼容旧字段，同时可读更简单的人类状态
+```ts
+Boolean(gameFlow?.game_flow?.length)
+```
 
-也就是说：
+---
 
-- Unity 保持不动
-- 网页端复用同一套产物和查询接口
+### 8.6 访问静态资源
 
-## 8. 当前网页端第一版范围
+```http
+GET /assets/{user}/{relativePath}
+```
 
-当前建议范围不变：
+示例：
 
-1. 通过 `POST /api/tasks/process` 启动任务
-2. 通过 `/api/job-status` 轮询状态
-3. 只围绕这三个结果文件工作
+```text
+http://127.0.0.1:8000/assets/001/frames/逛超市.jpg
+http://127.0.0.1:8000/assets/001/enhanced/进入超市并挑选商品.jpg
+http://127.0.0.1:8000/assets/001/option_images/stage_001_01_unknown.jpg
+http://127.0.0.1:8000/assets/001/media/audio/activity_theme_audio.mp3
+http://127.0.0.1:8000/assets/001/media/video/event_e1_xxx.mp4
+```
 
-- `extracted_context.json`
-- `GameMeta.json`
-- `GameFlow.json`
+资源接口不带 `/api`。
 
-4. 暂不接入 staged cache
-5. 继续复用 Unity 现有接口
+如果前端配置是：
 
-## 9. 下一步实现建议
+```ts
+API_BASE_URL = "http://127.0.0.1:8000/api"
+```
 
-下一步如果开始做代码，建议顺序是：
+则资源 origin 应为：
 
-1. 新增 `POST /api/tasks/process`
-2. 增加后台子进程/任务执行器，负责调用 `run_pipeline.py`
-3. 增加简单任务状态写入
-4. 调整 `/api/job-status`，兼容输出：
-   - 旧字段给 Unity
-   - 新字段给网页端
-5. 最后再做网页端页面
+```ts
+"http://127.0.0.1:8000"
+```
 
+前端应统一封装：
 
-二、AI 调用相关代码定位
+```ts
+function getApiOrigin() {
+  return CONFIG.ASSET_BASE_URL || CONFIG.API_BASE_URL.replace(/\/api\/?$/, "");
+}
 
-公共层
+function normalizeAssetPath(path?: string | null) {
+  if (!path) return "";
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^output\/[^/]+\//, "");
+}
 
-AIInteractionManager.cs (line 22) systemPromptTemplate
-AIInteractionManager.cs (line 38) RequestGuidance
-AIInteractionManager.cs (line 44) ProcessRequestQueue
-AIInteractionManager.cs (line 62) BuildFullPrompt
-说明：
+function buildAssetUrl(user: string, path?: string | null) {
+  const normalized = normalizeAssetPath(path);
+  if (!normalized) return "";
+  if (/^https?:\/\//.test(normalized)) return normalized;
+  return `${getApiOrigin()}/assets/${encodeURIComponent(user)}/${normalized}`;
+}
+```
 
-从职责上看，这里最适合成为 AI 调用总入口。
+不要这样写：
 
-但它现在只有一个很底的 RequestGuidance(userInput, componentRules)，还缺“场景语义层”的 API。
+```tsx
+<img src="frames/xxx.jpg" />
+```
 
-CallAIManager.cs (line 33) TriggerRequest
+应写：
 
-CallAIManager.cs (line 49) CallAIManagerWithDelay
+```tsx
+<img src={buildAssetUrl(user, path)} />
+```
 
-CallAIManager.cs (line 78) GetLatestUserInput
+---
 
-CallAIManager.cs (line 111) GetDynamicComponentRules
+## 9. Unity 对接逻辑
 
-CallAIManagerButton.cs (line 33) TriggerRequest
+Unity 当前逻辑：
 
-CallAIManagerButton.cs (line 49) CallAIManagerWithDelay
+```text
+1. 轮询 /api/job-status?user={user}
+2. ready == true 后请求 /api/game-meta?user={user}
+3. 请求 /api/game-flow?user={user}
+4. 解析 JSON 中的资源相对路径
+5. 请求 /assets/{user}/{relativePath}
+6. 下载后保存到 PersistentDataPath
+7. 进入回忆任务
+```
 
-CallAIManagerButton.cs (line 78) GetLatestUserInput
+因此：
 
-CallAIManagerButton.cs (line 111) GetDynamicComponentRules
+* 不要随意修改 `GameMeta.json` / `GameFlow.json` 的结构
+* 如果必须修改字段，必须同步改 Unity 解析代码
+* 医生网页端不应该反向要求后端修改 Unity JSON 结构
+* 医生网页预览应主要读 `extracted_context.json`
 
-问题：
+---
+
+## 10. GameFlow 阶段结构
+
+`GameFlow.json` 的根字段：
+
+```json
+{
+  "game_flow": []
+}
+```
 
-CallAIManager 和 CallAIManagerButton 基本是重复代码。
+常见 stage 字段：
 
-这层应该只保留一个极薄的触发器，核心逻辑往 AIInteractionManager 合并。
+```text
+stage_id
+stage_name
+stage_type
+stage_index
+task_type
+task_description
+correct_answer
+options
+hint_scene_images
+hints
+enhanced_image_path
+reference_frame_path
+long_description
+distractor_option
+video_clip_url
+correct_position
+total_items
+related_narrative
+advanced_recall_questions
+```
+
+常见任务类型：
+
+```text
+selection
+recall
+sequencing
+detail_recall
+```
+
+常见阶段类型：
+
+```text
+structure
+narrative
+item
+```
+
+---
+
+## 11. GameMeta 结构
+
+`GameMeta.json` 的根字段：
+
+```json
+{
+  "game_levels": []
+}
+```
+
+常见字段：
+
+```text
+structure_id
+structure_name
+structure_index
+people
+time
+location
+activity_description
+hint_scene_images
+narratives
+```
+
+每个 narrative 常见字段：
+
+```text
+narrative_id
+narrative_name
+narrative_description
+narrative_index
+start_time
+end_time
+scene_clues
+video_clip
+items
+```
+
+每个 item 常见字段：
+
+```text
+item_id
+item_name
+item_type
+item_index
+frame
+entity_clues
+detail_pair
+reference_frame_path
+enhanced_image_path
+```
+
+---
+
+## 12. 回忆报告与行为日志
+
+Unity 会在任务过程中记录用户行为。当前已有的 `TaskContext.json` / action history 结构可以支持基础回忆报告。
+
+当前可统计：
+
+```text
+每阶段错误次数
+错误选项
+提示请求次数
+作答历史
+完成阶段
+当前阶段
+```
 
-QwenApiClient.cs (line 21) SendMessageToQwen
+当前典型 action 结构：
 
-QwenApiClient.cs (line 44) PostRequestAsync
+```json
+{
+  "action_id": "d041847c-43c7-4864-8815-b0d1ff449cf6",
+  "timestamp": "2026-05-05 15:49:06",
+  "stage_id": "stage_001",
+  "stage_name": "逛超市",
+  "stage_index": 1,
+  "user_answer": "室内聚餐",
+  "is_correct": false,
+  "info": "structure",
+  "cue_times": 0
+}
+```
 
-说明：
+可以聚合：
 
-这是 HTTP 客户端层，不建议塞场景策略。
-Scene1
+```text
+按 stage_id 分组
+is_correct == false 且 info != "cue_requested" → 错误次数
+user_answer → 错误选项
+info == "cue_requested" 或 user_answer == "请求提示" → 提示请求次数
+cue_times → 当前阶段提示次数
+```
 
-ClickFunction.cs (line 104) 正确后 CallAIManager.Instance.TriggerRequest(...)
-ClickFunction.cs (line 149) 直接 AIInteractionManager.Instance.RequestGuidance(...)
-问题：
+但当前结构对精确反应时间不够稳定。
 
-同一个场景里同时存在“经 CallAIManager”与“直接 RequestGuidance”两种入口。
-Scene2
+建议 Unity 后续增强每条 action：
 
-RequestHintButton.cs (line 123) Scene1 hint 文案
-RequestHintButton.cs (line 128) Scene1 最终揭示
-RequestHintButton.cs (line 139) Scene2 recall hint 文案
-RequestHintButton.cs (line 160) Scene2 正确事件揭示
-RequestHintButton.cs (line 165) Scene2 干扰项说明
-RequestHintButton.cs (line 178) Scene3 hint 文案
-问题：
+```json
+{
+  "action_id": "xxx",
+  "timestamp": "2026-05-05 15:49:06",
+  "stage_id": "stage_001",
+  "stage_name": "逛超市",
+  "stage_index": 1,
 
-这些 prompt 全写死在 RequestHintButton 里，策略和文案耦合严重。
+  "scene": "scene1",
+  "stage_type": "structure",
+  "task_type": "selection",
 
-Scene2GameManager.cs (line 459) TriggerAutoAI
+  "action_type": "select_option",
+  "user_answer": "室内聚餐",
+  "correct_answer": "逛超市",
+  "is_correct": false,
 
-Scene2GameManager.cs (line 481) 直接 RequestGuidance
+  "cue_times": 0,
+  "hint_level": 0,
 
-问题：
+  "reaction_time_ms": 3200
+}
+```
 
-Scene2 也自己拼 rules/userInput。
-Scene3
+请求提示时：
 
-Scene3GamePlayManager.cs (line 182) TriggerAutoAI
-Scene3GamePlayManager.cs (line 188) 直接 RequestGuidance
-Scene4
+```json
+{
+  "action_type": "cue_requested",
+  "user_answer": null,
+  "is_correct": null,
+  "cue_times": 3,
+  "hint_level": 3,
+  "reaction_time_ms": 1800
+}
+```
 
-ItemHintController.cs (line 64) item 提示文案
-AdvancedRecallController.cs (line 121) detail recall 错误时提示文案
-问题：
+### TODO: recall-report 接口
 
-Scene4 的两个 AI 入口也是散落的。
+当前建议新增：
 
-建议保留 AIInteractionManager 作为总入口，把“按场景拼 prompt”的工作也并进去。
-CallAIManager 可以保留，但只做延迟触发，不再自己生成 userInput/componentRules。
+```http
+POST /api/recall-report?user=001
+```
 
-建议新增的方法形态是“场景语义 API”，而不是继续传裸字符串。
+用于 Unity 上传行为日志。
 
-通用方法
+保存路径建议：
 
-void RequestScenarioHint(AIScenario scenario, string extraRule = null)
-逻辑：根据 scenario 从 MetaData 读当前上下文，统一组装 userInput、componentRules，再走 BuildFullPrompt。
+```text
+output/001/recall_report_raw.json
+```
 
-void RequestAnswerFeedback(AIScenario scenario, bool isCorrect, string userAnswer, string correctAnswer, string targetName = null)
-逻辑：统一处理答对/答错后的鼓励、安慰、隐式提示。
+或暂时保存为：
 
-建议的场景枚举
+```text
+output/001/TaskContext.json
+```
 
-Scene1ThemeHintSoft
-Scene1ThemeReveal
-Scene2NarrativeHintSoft
-Scene2NarrativeReveal
-Scene2DistractorExplain
-Scene3SequencingHintSoft
-Scene4ItemHintSoft
-Scene4DetailQuestionHint
-具体替换关系
+医生网页读取：
 
-RequestHintButton 里所有 TriggerRequest("长中文 prompt")
-改成：
+```http
+GET /api/recall-report?user=001
+```
 
-AIInteractionManager.Instance.RequestScenarioHint(AIScenario.Scene1ThemeHintSoft)
-...Scene2NarrativeReveal
-...Scene4ItemHintSoft
-这类调用
-ClickFunction、Scene2GameManager、Scene3GamePlayManager 里自己的 TriggerAutoAI
-改成统一调用：
+第一版可以直接返回原始行为日志，前端聚合。
 
-RequestAnswerFeedback(...)
-CallAIManager 与 CallAIManagerButton
-改成只负责：
+更稳定的方案是后端返回聚合后的医生报告结构。
 
-延迟一帧
-调一个统一方法，例如 AIInteractionManager.Instance.RequestDefaultFeedback()
-不再各自维护 GetLatestUserInput/GetDynamicComponentRules
+---
+
+## 13. staged / pipeline_cache 说明
+
+当前第一版实验流程主要使用：
+
+```text
+full_context
+```
+
+也就是调用完整上下文生成逻辑，直接生成或复用：
+
+```text
+extracted_context.json
+```
+
+`staged` 模式和 `pipeline_cache` 当前更适合：
+
+```text
+开发调试
+中间结果检查
+未来分阶段优化
+```
+
+不建议第一版暴露给医生网页端。
+
+医生网页端不需要理解：
+
+```text
+stage1_video_parse
+stage2_event_rebuild
+stage3_detail_generate
+```
+
+它只需要关心：
+
+```text
+上传视频
+处理状态
+处理完成
+预览 context
+确认 Unity 可拉取
+```
+
+---
+
+## 14. 常见问题排查
+
+### 14.1 前端请求 404
+
+检查：
+
+```text
+API_BASE_URL 是否是 http://127.0.0.1:8000/api
+后端是否运行 python api_server.py
+接口是否带 /api 前缀
+```
+
+错误：
+
+```text
+http://127.0.0.1:8000/tasks/process
+```
+
+正确：
+
+```text
+http://127.0.0.1:8000/api/tasks/process
+```
+
+---
+
+### 14.2 图片显示不出来
+
+检查：
+
+```text
+是否通过 /assets/{user}/{relativePath} 请求
+是否把反斜杠 \ 替换成 /
+是否去掉 output/{user}/ 前缀
+文件是否真实存在于 output/{user}/...
+```
+
+错误：
+
+```tsx
+<img src="frames/逛超市.jpg" />
+```
+
+正确：
+
+```tsx
+<img src={buildAssetUrl(user, "frames/逛超市.jpg")} />
+```
+
+---
+
+### 14.3 context 页面为空
+
+检查前端是否仍在读取旧字段：
+
+```text
+activity_theme
+sub_events
+key_objects
+object_details
+qa
+```
+
+真实结构应读取：
+
+```text
+activity
+events
+entities
+detail_pair
+```
+
+---
+
+### 14.4 GameMeta/GameFlow 状态灯失败
+
+不要检查：
+
+```text
+gameMeta.success
+gameFlow.success
+```
+
+真实判断：
+
+```ts
+Boolean(gameMeta?.game_levels?.length)
+Boolean(gameFlow?.game_flow?.length)
+```
+
+---
+
+### 14.5 Unity 一直 ready=false
+
+检查：
+
+```text
+GET /api/job-status?user=001
+status 是否为 all_ready
+asset_validation.ok 是否为 true
+GameMeta.json 是否存在
+GameFlow.json 是否存在
+资源文件是否缺失
+```
+
+---
+
+### 14.6 CORS 报错
+
+如果前端和后端不同端口，Flask 需要允许跨域：
+
+```bash
+pip install flask-cors
+```
+
+```python
+from flask_cors import CORS
+
+CORS(app)
+```
+
+---
+
+### 14.7 大文件误提交 GitHub
+
+不要提交：
+
+```text
+output/
+videos/
+lifelog.db
+.env
+模型缓存
+日志文件
+```
+
+`.gitignore` 应覆盖：
+
+```gitignore
+output/
+videos/
+*.db
+.env
+*.log
+__pycache__/
+```
+
+---
+
+## 15. 当前不做的事情
+
+实验第一版不做：
+
+```text
+正式登录/权限系统
+医院级数据库系统
+云端正式部署
+多医院/多医生权限隔离
+医生网页端直接编辑 Unity JSON
+staged pipeline 可视化
+复杂任务失败恢复
+长期统计报表
+```
+
+---
+
+## 16. 当前 TODO
+
+```text
+1. 完善 /api/recall-report
+2. Unity 行为日志增加 reaction_time_ms
+3. Unity 行为日志增加 action_type
+4. Unity 行为日志冗余 scene / stage_type / task_type
+5. shopping_list 进入 prompt，但只作为弱约束
+6. 医生网页端预览以 /api/context 为主
+7. 前端资源路径统一使用 /assets/{user}/{relativePath}
+8. 后端生成资源路径时清洗 output\default\xxx 这类异常路径
+9. 多用户 user 参数稳定化
+10. status.json 与 DB pipeline_state 的职责继续收敛
+```
+
+---
+
+## 17. 最小实验验收标准
+
+系统能完成以下闭环即可：
+
+```text
+1. 医生网页填写用户和活动信息
+2. 上传第一视角视频
+3. 后端启动 full_context pipeline
+4. 网页显示处理进度
+5. 后端生成 extracted_context.json
+6. 后端生成 GameMeta.json / GameFlow.json
+7. 网页显示处理结果预览
+8. Unity 输入 user_id
+9. Unity 拉取 GameMeta/GameFlow 和资源
+10. 老人完成回忆任务
+11. Unity 保存行为日志
+12. 医生网页查看用户回忆表现
+```
+
+```
+```
