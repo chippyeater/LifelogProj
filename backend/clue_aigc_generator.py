@@ -16,6 +16,7 @@ from typing import Any, Optional
 import requests
 import cv2
 from volcengine.visual.VisualService import VisualService
+from runtime_config import get_config_value
 
 # Logging
 logging.basicConfig(
@@ -61,6 +62,12 @@ class VolcEngineAIGCGenerator:
         self.output_dir = output_dir
         self.add_aigc_meta = add_aigc_meta
         self.add_logo = add_logo
+        aigc_cfg = get_config_value("aigc", {})
+        self.max_retry = int(aigc_cfg.get("max_retry", self.MAX_RETRY))
+        self.poll_interval = float(aigc_cfg.get("poll_interval_seconds", self.POLL_INTERVAL))
+        self.timeout_seconds = float(aigc_cfg.get("timeout_seconds", self.TIMEOUT))
+        self.download_timeout_seconds = float(aigc_cfg.get("download_timeout_seconds", 10))
+        self.prompt_max_chars = int(aigc_cfg.get("prompt_max_chars", 800))
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Initialize CV SDK client
@@ -77,7 +84,7 @@ class VolcEngineAIGCGenerator:
         self,
         action: str,
         body_dict: dict,
-        max_retries: int = MAX_RETRY,
+        max_retries: int | None = None,
     ) -> dict:
         """
         发送带签名的 POST 请求到火山引擎。
@@ -116,7 +123,8 @@ class VolcEngineAIGCGenerator:
                     return None
             return None
 
-        for attempt in range(max_retries):
+        retry_total = self.max_retry if max_retries is None else max_retries
+        for attempt in range(retry_total):
             try:
                 logger.debug(f"SDK request - Action: {action}, Body: {body_dict}")
                 resp = self.visual_service.common_json_handler(action, body_dict)
@@ -142,9 +150,9 @@ class VolcEngineAIGCGenerator:
                     err_msg = str(e)
 
                 logger.warning(
-                    f"SDK request failed (attempt {attempt + 1}/{max_retries}): {err_msg}"
+                    f"SDK request failed (attempt {attempt + 1}/{retry_total}): {err_msg}"
                 )
-                if attempt == max_retries - 1:
+                if attempt == retry_total - 1:
                     raise RuntimeError(err_msg)
 
                 delay = 2 ** attempt
@@ -163,7 +171,7 @@ class VolcEngineAIGCGenerator:
 
     def _download_image(self, url: str, save_path: str) -> None:
         """下载图片到本地"""
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=self.download_timeout_seconds)
         resp.raise_for_status()
         with open(save_path, "wb") as f:
             f.write(resp.content)
@@ -215,7 +223,7 @@ class VolcEngineAIGCGenerator:
         # Step 1: 提交任务
         body_submit = {
             "req_key": "seededit_v3.0",
-            "prompt": prompt[:800],  # 截断超长 prompt
+            "prompt": prompt[: self.prompt_max_chars],
             "seed": seed,
             "scale": max(0.0, min(1.0, scale)),
         }
@@ -254,7 +262,7 @@ class VolcEngineAIGCGenerator:
             "req_json": json.dumps(req_json_config, separators=(",", ":")),
         }
 
-        while time.time() - start_time < self.TIMEOUT:
+        while time.time() - start_time < self.timeout_seconds:
             try:
                 query_resp = self._send_sdk_request("CVSync2AsyncGetResult", body_query)
                 status = query_resp["data"]["status"]
@@ -292,8 +300,8 @@ class VolcEngineAIGCGenerator:
                     return normalized_path
 
                 if status in [self.STATUS_IN_QUEUE, self.STATUS_GENERATING]:
-                    logger.info(f"Task status: {status}, polling again in {self.POLL_INTERVAL}s...")
-                    time.sleep(self.POLL_INTERVAL)
+                    logger.info(f"Task status: {status}, polling again in {self.poll_interval}s...")
+                    time.sleep(self.poll_interval)
                 else:
                     raise RuntimeError(f"Unexpected task status: {status}")
 
@@ -355,7 +363,7 @@ class VolcEngineAIGCGenerator:
             "req_json": json.dumps(req_json_config, separators=(",", ":")),
         }
 
-        while time.time() - start_time < self.TIMEOUT:
+        while time.time() - start_time < self.timeout_seconds:
             query_resp = self._send_sdk_request("CVSync2AsyncGetResult", body_query)
             status = query_resp["data"]["status"]
 
@@ -382,8 +390,8 @@ class VolcEngineAIGCGenerator:
                 return normalized_path
 
             if status in [self.STATUS_IN_QUEUE, self.STATUS_GENERATING]:
-                logger.info("Task status: %s, polling again in %ss...", status, self.POLL_INTERVAL)
-                time.sleep(self.POLL_INTERVAL)
+                logger.info("Task status: %s, polling again in %ss...", status, self.poll_interval)
+                time.sleep(self.poll_interval)
             else:
                 raise RuntimeError(f"Unexpected task status: {status}")
 

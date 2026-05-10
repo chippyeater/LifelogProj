@@ -2,6 +2,8 @@ import json
 import os
 from typing import Any, Dict
 
+from runtime_config import get_config_value
+
 
 class PipelineCacheManager:
     # 统一管理分阶段缓存目录和文件写入
@@ -13,7 +15,8 @@ class PipelineCacheManager:
 
     def __init__(self, user_dir: str) -> None:
         self.user_dir = user_dir
-        self.cache_root = os.path.join(user_dir, "pipeline_cache")
+        cache_dirname = str(get_config_value("paths.pipeline_cache_dirname", "pipeline_cache"))
+        self.cache_root = os.path.join(user_dir, cache_dirname)
         self.manifest_path = os.path.join(self.cache_root, "manifest.json")
 
     def ensure_dirs(self) -> None:

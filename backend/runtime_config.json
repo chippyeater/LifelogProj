@@ -1,0 +1,136 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "api_base_url": "",
+    "database_path": "lifelog.db"
+  },
+  "paths": {
+    "output_root": "output",
+    "videos_dir": "videos",
+    "upload_chunks_dir": "upload_chunks",
+    "prompts_dir": "prompts",
+    "temp_dir": "tmp",
+    "pipeline_cache_dirname": "pipeline_cache",
+    "logs_dirname": "logs",
+    "siliconflow_log_path": "output/siliconflow_responses.txt",
+    "material_library_root": "output"
+  },
+  "binaries": {
+    "ffmpeg_bin": "ffmpeg",
+    "ffprobe_bin": "ffprobe"
+  },
+  "pipeline": {
+    "default_activity": "shopping",
+    "default_people": "me",
+    "default_time": "2024-01-05 15:00",
+    "default_location": "supermarket",
+    "output_root": "output",
+    "pipeline_mode": "staged",
+    "start_stage": 1,
+    "end_stage": null,
+    "confusion_count": 2,
+    "force_regenerate_images": false
+  },
+  "video_processing": {
+    "compression": {
+      "enabled_by_default": false,
+      "scale_width": -2,
+      "scale_height": 720,
+      "frame_rate": 15,
+      "video_codec": "libx264",
+      "video_bitrate": "2M",
+      "audio_codec": "aac",
+      "audio_bitrate": "128k",
+      "preset": "",
+      "overwrite": true,
+      "keep_audio": true,
+      "output_subdir": "compressed",
+      "filename_prefix": "compressed"
+    },
+    "media_export": {
+      "activity_audio_min_seconds": 3,
+      "activity_audio_max_seconds": 8,
+      "event_video_min_seconds": 4,
+      "event_video_max_seconds": 10,
+      "video_codec": "libx264",
+      "video_pixel_format": "yuv420p",
+      "video_profile": "high",
+      "video_level": "4.0",
+      "video_preset": "medium",
+      "video_crf": 23,
+      "audio_codec": "aac",
+      "audio_bitrate": "128k",
+      "audio_sample_rate": 44100,
+      "audio_channels": 2,
+      "movflags": "+faststart"
+    }
+  },
+  "models": {
+    "siliconflow": {
+      "api_key": "",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "tencent/Hunyuan-MT-7B",
+      "temperature": 0.2,
+      "max_tokens": 4000,
+      "translate_max_tokens": 1000,
+      "timeout_seconds": 120,
+      "log_path": "output/siliconflow_responses.txt"
+    },
+    "bailian": {
+      "api_key": "",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.5-flash",
+      "max_tokens": 4096,
+      "temperature": 0.2,
+      "stage2_model": "",
+      "stage2_max_tokens": 4096,
+      "stage2_temperature": 0.2,
+      "stage3_model": "",
+      "stage3_max_tokens": 4096,
+      "stage3_temperature": 0.2,
+      "input_mode": "text",
+      "upload_api_url": "https://dashscope.aliyuncs.com/api/v1/uploads",
+      "use_temp_upload": false,
+      "policy_timeout_seconds": 60,
+      "upload_timeout_seconds": 300
+    },
+    "embedding": {
+      "model_name": "moka-ai/m3e-base",
+      "event_similarity_threshold": 0.9,
+      "entity_similarity_threshold": 0.9
+    },
+    "volcengine": {
+      "access_key": "",
+      "secret_key": ""
+    }
+  },
+  "aigc": {
+    "max_retry": 3,
+    "poll_interval_seconds": 3,
+    "timeout_seconds": 30,
+    "download_timeout_seconds": 10,
+    "prompt_max_chars": 800,
+    "option_image_width": 512,
+    "option_image_height": 512,
+    "option_image_scale": 2.5,
+    "add_logo": false,
+    "add_aigc_meta": true
+  },
+  "unity": {
+    "activity_option_total": 3,
+    "detail_option_total": 4,
+    "confusion_material_subdir": "default"
+  },
+  "prompts": {
+    "full_context": "prompts/full_context_prompt.md",
+    "stage1_video_parse": "prompts/stage1_video_parse_prompt.md",
+    "stage2_event_rebuild": "prompts/stage2_event_rebuild_prompt.md",
+    "stage3_detail_generate": "prompts/stage3_detail_generate_prompt.md",
+    "strategy": "prompts/strategy_prompt.md",
+    "strategy_components": "prompts/strategy_components.json"
+  },
+  "strategy": {
+    "response_timeout_seconds": 10
+  }
+}

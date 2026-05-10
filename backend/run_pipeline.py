@@ -20,12 +20,13 @@ from make_context import (
 from clue_aigc_generator import VolcEngineAIGCGenerator
 from generate_unity_json import generate_game_meta_flow, validate_generated_assets
 from db import init_db, upsert_user_video, count_subevents, get_video_record, get_pipeline_state, set_pipeline_state
+from runtime_config import get_config_value, resolve_backend_path
 from utils.frame_utils import extract_frame_to_path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ACTIVITY_TIME = "2024年1月5日15:00"
-DEFAULT_LOCATION = "超市"
+DEFAULT_ACTIVITY_TIME = str(get_config_value("pipeline.default_time", "2024年1月5日15:00"))
+DEFAULT_LOCATION = str(get_config_value("pipeline.default_location", "超市"))
 STAGE_NAME_BY_NUMBER = {
     1: "stage1_video_parse",
     2: "stage2_event_rebuild",
@@ -300,7 +301,7 @@ def _parse_datetime(value: str) -> datetime.datetime | None:
         return None
 
 def _ffprobe_metadata(video_path: str) -> dict:
-    ffprobe = os.getenv("FFPROBE_BIN") or shutil.which("ffprobe")
+    ffprobe = str(get_config_value("binaries.ffprobe_bin", "ffprobe"))
     if not ffprobe or not os.path.exists(video_path):
         return {}
     cmd = [
@@ -400,13 +401,15 @@ def main() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     for name in ("huggingface_hub", "transformers", "sentence_transformers"):
         logging.getLogger(name).setLevel(logging.ERROR)
+    pipeline_cfg = get_config_value("pipeline", {})
+    compress_cfg = get_config_value("video_processing.compression", {})
 
     # 解析命令行参数
     parser = argparse.ArgumentParser(description="Run full pipeline for a user.")
     parser.add_argument("--user", required=True, help="User name (output subfolder)")
     parser.add_argument("--video", required=True, help="Video file name (will be prefixed with videos/)")
-    parser.add_argument("--activity", default="逛超市", help="Activity description")
-    parser.add_argument("--people", default="我", help="People involved")
+    parser.add_argument("--activity", default=pipeline_cfg.get("default_activity", "逛超市"), help="Activity description")
+    parser.add_argument("--people", default=pipeline_cfg.get("default_people", "我"), help="People involved")
     parser.add_argument("--time", dest="activity_time", default=DEFAULT_ACTIVITY_TIME, help="Activity time")
     parser.add_argument("--location", default=DEFAULT_LOCATION, help="Activity location")
     parser.add_argument(
@@ -414,40 +417,40 @@ def main() -> None:
         action="store_true",
         help="Clear reference_frame_path/enhanced_image_path before regenerating images",
     )
-    parser.add_argument("--output-root", default="output", help="Root output directory")
+    parser.add_argument("--output-root", default=pipeline_cfg.get("output_root", "output"), help="Root output directory")
     parser.add_argument("--base-url", default=None, help="Base URL for asset links (optional)")
     parser.add_argument(
         "--compress-video",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=bool(compress_cfg.get("enabled_by_default", False)),
         help="Compress video before processing (default: False)",
     )
     parser.add_argument(
         "--pipeline-mode",
         choices=("staged", "full_context"),
-        default="staged",
+        default=pipeline_cfg.get("pipeline_mode", "staged"),
         help="Pipeline mode: staged uses 3-stage cache chain, full_context uses the legacy one-shot prompt",
     )
-    parser.add_argument("--compress-width", type=int, default=960, help="Compress width (default: 960)")
-    parser.add_argument("--compress-height", type=int, default=540, help="Compress height (default: 540)")
+    parser.add_argument("--compress-width", type=int, default=int(compress_cfg.get("scale_width", -2)), help="Compress width")
+    parser.add_argument("--compress-height", type=int, default=int(compress_cfg.get("scale_height", 720)), help="Compress height")
     parser.add_argument(
         "--start-stage",
         type=int,
         choices=(1, 2, 3),
-        default=1,
+        default=int(pipeline_cfg.get("start_stage", 1)),
         help="Start pipeline from a cached stage (default: 1)",
     )
     parser.add_argument(
         "--end-stage",
         type=int,
         choices=(1, 2, 3),
-        default=None,
+        default=pipeline_cfg.get("end_stage"),
         help="Stop pipeline after the specified stage (currently supports 1, 2 or 3)",
     )
     parser.add_argument(
         "--confusion-count",
         type=int,
-        default=2,
+        default=int(pipeline_cfg.get("confusion_count", 2)),
         help="Number of confusion events to insert into narrative recall tasks (default: 0)",
     )
     args = parser.parse_args()
@@ -465,7 +468,7 @@ def main() -> None:
     cache_manager.ensure_dirs()
 
     # 记录本次运行的控制台输出（stdout/stderr）
-    log_dir = os.path.join(user_dir, "logs")
+    log_dir = os.path.join(user_dir, str(get_config_value("paths.logs_dirname", "logs")))
     os.makedirs(log_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = os.path.join(log_dir, f"run_{ts}.log")
@@ -503,14 +506,15 @@ def main() -> None:
     logger.info("[log] console output is being saved to: %s", log_path)
 
     # 初始化/连接数据库
-    db_path = os.getenv("PIPELINE_DB_PATH", os.path.join(os.getcwd(), "lifelog.db"))
+    db_path = resolve_backend_path(get_config_value("server.database_path", "lifelog.db"))
     init_db(db_path)
 
     # 解析视频路径与数据库记录
     video_name = os.path.basename(args.video)
     status_doc = _read_status_doc(args.output_root, args.user)
     task_id = status_doc.get("task_id") or os.path.splitext(video_name)[0]
-    source_video_path = os.path.join("videos", video_name)
+    videos_rel_dir = str(get_config_value("paths.videos_dir", "videos"))
+    source_video_path = os.path.join(videos_rel_dir, video_name)
     cache_manifest = cache_manager.build_manifest(
         user_id=args.user,
         video_name=video_name,
@@ -545,37 +549,56 @@ def main() -> None:
         )
 
     def _compress_video(input_path: str, output_path: str, width: int, height: int) -> None:
-        ffmpeg = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg not found. Set FFMPEG_BIN or install ffmpeg.")
+        # Config-managed: ffmpeg path and compression parameters come from runtime_config.json.
+        compression_cfg = get_config_value("video_processing.compression", {})
+        ffmpeg = str(get_config_value("binaries.ffmpeg_bin", "ffmpeg"))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cmd = [
             ffmpeg,
-            "-y",
+            "-y" if compression_cfg.get("overwrite", True) else "-n",
             "-i",
             input_path,
             "-vf",
             f"scale={int(width)}:{int(height)}",
+            "-r",
+            str(compression_cfg.get("frame_rate", 15)),
             "-c:v",
-            "libx264",
-            "-flags:v",
-            "+global_header",
-            "-crf",
-            "18",
-            "-preset",
-            "medium",
-            "-an",
-            output_path,
+            str(compression_cfg.get("video_codec", "libx264")),
+            "-b:v",
+            str(compression_cfg.get("video_bitrate", "2M")),
         ]
+        preset = str(compression_cfg.get("preset", "") or "").strip()
+        if preset:
+            cmd.extend(["-preset", preset])
+        if compression_cfg.get("keep_audio", True):
+            cmd.extend(
+                [
+                    "-c:a",
+                    str(compression_cfg.get("audio_codec", "aac")),
+                    "-b:a",
+                    str(compression_cfg.get("audio_bitrate", "128k")),
+                ]
+            )
+        else:
+            cmd.append("-an")
+        cmd.append(
+            output_path,
+        )
         subprocess.run(cmd, check=True)
 
     try:
         if args.compress_video:
-            # 压缩为 540p 后再使用
-            compressed_dir = os.path.join(user_dir, "compressed")
+            # 按配置压缩后再进入后续处理
+            compressed_dir = os.path.join(
+                user_dir,
+                str(get_config_value("video_processing.compression.output_subdir", "compressed")),
+            )
             compressed_video_path = os.path.join(
                 compressed_dir,
-                f"compressed_{args.compress_width}x{args.compress_height}_{video_name}",
+                (
+                    f"{get_config_value('video_processing.compression.filename_prefix', 'compressed')}_"
+                    f"{args.compress_width}x{args.compress_height}_{video_name}"
+                ),
             )
             if os.path.exists(compressed_video_path):
                 logger.info("Compressed video already exists: %s", compressed_video_path)
@@ -886,16 +909,16 @@ def main() -> None:
                 progress=65,
                 current_step="开始生成 AIGC 增强图",
             )
-            volc_access_key = os.getenv("VOLC_ACCESS_KEY")
-            volc_secret_key = os.getenv("VOLC_SECRET_KEY")
+            volc_access_key = get_config_value("models.volcengine.access_key")
+            volc_secret_key = get_config_value("models.volcengine.secret_key")
             aigc_state = "skipped"
             if volc_access_key and volc_secret_key:
                 generator = VolcEngineAIGCGenerator(
                     access_key=volc_access_key,
                     secret_key=volc_secret_key,
                     output_dir=os.path.join(user_dir, "enhanced"),
-                    add_logo=False,
-                    add_aigc_meta=True,
+                    add_logo=bool(get_config_value("aigc.add_logo", False)),
+                    add_aigc_meta=bool(get_config_value("aigc.add_aigc_meta", True)),
                 )
                 execute_scene_clue_enhancement(
                     full_context,

@@ -3,6 +3,7 @@ import os
 import subprocess
 from typing import Optional, Tuple
 
+from runtime_config import get_config_value
 from utils.frame_utils import parse_timestamp_to_seconds
 
 
@@ -13,9 +14,9 @@ def normalize_base_url(base_url: str) -> str:
 def resolve_export_base_url(explicit_base_url: Optional[str] = None) -> Optional[str]:
     if explicit_base_url:
         return normalize_base_url(explicit_base_url)
-    env_base_url = os.getenv("API_BASE_URL", "").strip()
-    if env_base_url:
-        return normalize_base_url(env_base_url)
+    config_base_url = str(get_config_value("server.api_base_url", "") or "").strip()
+    if config_base_url:
+        return normalize_base_url(config_base_url)
     return None
 
 
@@ -71,12 +72,12 @@ def clamp_media_range(
 
 
 def _run_ffmpeg(args: list[str]) -> None:
-    ffmpeg = os.getenv("FFMPEG_BIN") or "ffmpeg"
+    ffmpeg = str(get_config_value("binaries.ffmpeg_bin", "ffmpeg"))
     subprocess.run([ffmpeg, *args], check=True, capture_output=True, text=True)
 
 
 def _probe_video_clip(path: str) -> dict:
-    ffprobe = os.getenv("FFPROBE_BIN") or "ffprobe"
+    ffprobe = str(get_config_value("binaries.ffprobe_bin", "ffprobe"))
     result = subprocess.run(
         [
             ffprobe,
@@ -119,6 +120,7 @@ def _validate_exported_video_clip(path: str) -> None:
 
 
 def export_audio_clip(video_path: str, start_time: str, end_time: str, output_path: str) -> str:
+    export_cfg = get_config_value("video_processing.media_export", {})
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     _run_ffmpeg(
         [
@@ -133,9 +135,9 @@ def export_audio_clip(video_path: str, start_time: str, end_time: str, output_pa
             "-acodec",
             "libmp3lame",
             "-ar",
-            "44100",
+            str(export_cfg.get("audio_sample_rate", 44100)),
             "-ac",
-            "2",
+            str(export_cfg.get("audio_channels", 2)),
             output_path,
         ]
     )
@@ -143,6 +145,7 @@ def export_audio_clip(video_path: str, start_time: str, end_time: str, output_pa
 
 
 def export_video_clip(video_path: str, start_time: str, end_time: str, output_path: str) -> str:
+    export_cfg = get_config_value("video_processing.media_export", {})
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     _run_ffmpeg(
         [
@@ -154,21 +157,23 @@ def export_video_clip(video_path: str, start_time: str, end_time: str, output_pa
             "-to",
             end_time,
             "-c:v",
-            "libx264",
+            str(export_cfg.get("video_codec", "libx264")),
             "-pix_fmt",
-            "yuv420p",
+            str(export_cfg.get("video_pixel_format", "yuv420p")),
             "-profile:v",
-            "high",
+            str(export_cfg.get("video_profile", "high")),
             "-level:v",
-            "4.0",
+            str(export_cfg.get("video_level", "4.0")),
             "-preset",
-            "medium",
+            str(export_cfg.get("video_preset", "medium")),
             "-crf",
-            "23",
+            str(export_cfg.get("video_crf", 23)),
             "-c:a",
-            "aac",
+            str(export_cfg.get("audio_codec", "aac")),
+            "-b:a",
+            str(export_cfg.get("audio_bitrate", "128k")),
             "-movflags",
-            "+faststart",
+            str(export_cfg.get("movflags", "+faststart")),
             output_path,
         ]
     )

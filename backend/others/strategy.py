@@ -6,12 +6,13 @@ from dotenv import load_dotenv
 from jinja2 import Template
 from flask import Flask, jsonify
 from openai import OpenAI
+from runtime_config import get_config_value, resolve_prompt_path
 
 load_dotenv()  # 鍔犺浇 .env 鏂囦欢涓殑鐜鍙橀噺
 
 client = OpenAI(
-    base_url='https://api.siliconflow.cn/v1',
-    api_key=os.getenv("SILICONFLOW_API_KEY")
+    base_url=str(get_config_value("models.siliconflow.base_url", "https://api.siliconflow.cn/v1")),
+    api_key=get_config_value("models.siliconflow.api_key")
 )
 
 app = Flask(__name__)
@@ -34,8 +35,8 @@ class RecallAssistant:
         
         self.events = self.activity_context.get("events", {})
         self.activity = self.activity_context.get("activity", {})
-        self.model_name = "tencent/Hunyuan-MT-7B"
-        self.response_timeout = 10
+        self.model_name = str(get_config_value("models.siliconflow.model", "tencent/Hunyuan-MT-7B"))
+        self.response_timeout = float(get_config_value("strategy.response_timeout_seconds", 10))
     
     def get_stage(self):
         """浠巘ask_context閲岃幏鍙栧綋鍓嶄换鍔￠樁娈典俊鎭細starting / in_progress / ending
@@ -200,7 +201,7 @@ class RecallAssistant:
             for event in self.events.values()
             for name in event.get("key_objects", {}).keys()
         ]
-        with open("prompts/strategy_components.json", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("strategy_components"), "r", encoding="utf-8") as f:
             strategy_components_rules = json.load(f)
             rules = []
             for i in strategy_components:
@@ -224,7 +225,7 @@ class RecallAssistant:
             "component_rules": "\n  ".join(rules)
         }
         
-        with open("prompts/strategy_prompt.md", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("strategy"), "r", encoding="utf-8") as f:
             template = Template(f.read())
             prompt = template.render(**prompt_vars)
 

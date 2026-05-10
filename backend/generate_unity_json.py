@@ -25,6 +25,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from llm_client import SiliconFlowLLM
 from clue_aigc_generator import VolcEngineAIGCGenerator
+from runtime_config import get_config_value, resolve_backend_path
 from utils.media_export import (
     build_asset_relative_path,
     clamp_media_range,
@@ -32,17 +33,17 @@ from utils.media_export import (
     export_video_clip,
 )
 
-OUTPUT_DIR = os.path.join(os.getcwd(), "output")
+OUTPUT_DIR = resolve_backend_path(get_config_value("paths.output_root", "output"))
 INPUT_PATH = os.path.join(OUTPUT_DIR, "extracted_context.json")
 OUTPUT_GAME_META = os.path.join(OUTPUT_DIR, "GameMeta.json")
 OUTPUT_GAME_FLOW = os.path.join(OUTPUT_DIR, "GameFlow.json")
 
-SIMILARITY_THRESHOLD = 0.9
-EMBEDDING_MODEL_NAME = "moka-ai/m3e-base"
-ENTITY_SIMILARITY_THRESHOLD = 0.9
-ACTIVITY_OPTION_TOTAL = 3
+SIMILARITY_THRESHOLD = float(get_config_value("models.embedding.event_similarity_threshold", 0.9))
+EMBEDDING_MODEL_NAME = str(get_config_value("models.embedding.model_name", "moka-ai/m3e-base"))
+ENTITY_SIMILARITY_THRESHOLD = float(get_config_value("models.embedding.entity_similarity_threshold", 0.9))
+ACTIVITY_OPTION_TOTAL = int(get_config_value("unity.activity_option_total", 3))
 ACTIVITY_POOL = ["赏花", "做家务", "玩游戏", "逛街", "运动", "看书", "看电影", "聚会", "旅行", "上班", "做饭", "遛狗", "看展览", "听音乐会", "看演唱会", "参观博物馆", "户外烧烤", "室内聚餐"]
-DETAIL_OPTION_TOTAL = 4
+DETAIL_OPTION_TOTAL = int(get_config_value("unity.detail_option_total", 4))
 
 
 def _load_embedding_model() -> Optional[Any]:
@@ -192,10 +193,10 @@ def _generate_option_images(
                 "仅保留主体，不要其他元素。"
             )
         img_path = generator.generate_image_text(
-            prompt=prompt[:800],
-            scale=2.5,
-            width=512,
-            height=512,
+            prompt=prompt[: int(get_config_value("aigc.prompt_max_chars", 800))],
+            scale=float(get_config_value("aigc.option_image_scale", 2.5)),
+            width=int(get_config_value("aigc.option_image_width", 512)),
+            height=int(get_config_value("aigc.option_image_height", 512)),
         )
         if os.path.abspath(img_path) != os.path.abspath(final_path):
             os.replace(img_path, final_path)
@@ -782,8 +783,8 @@ def _export_activity_audio_asset(
     clipped_start, clipped_end = clamp_media_range(
         str(start_time),
         str(end_time),
-        min_seconds=float(os.getenv("EXPORT_ACTIVITY_AUDIO_MIN_SECONDS", "3")),
-        max_seconds=float(os.getenv("EXPORT_ACTIVITY_AUDIO_MAX_SECONDS", "8")),
+        min_seconds=float(get_config_value("video_processing.media_export.activity_audio_min_seconds", 3)),
+        max_seconds=float(get_config_value("video_processing.media_export.activity_audio_max_seconds", 8)),
     )
     relative_path = "media/audio/activity_theme_audio.mp3"
     output_path = os.path.join(output_dir, "media", "audio", "activity_theme_audio.mp3")
@@ -813,8 +814,8 @@ def _export_event_video_asset(
     clipped_start, clipped_end = clamp_media_range(
         str(start_time),
         str(end_time),
-        min_seconds=float(os.getenv("EXPORT_EVENT_VIDEO_MIN_SECONDS", "4")),
-        max_seconds=float(os.getenv("EXPORT_EVENT_VIDEO_MAX_SECONDS", "10")),
+        min_seconds=float(get_config_value("video_processing.media_export.event_video_min_seconds", 4)),
+        max_seconds=float(get_config_value("video_processing.media_export.event_video_max_seconds", 10)),
     )
     filename = _build_safe_media_filename("event", event_id or "video", "mp4")
     relative_path = f"media/video/{filename}"
@@ -951,7 +952,9 @@ def generate_game_meta_flow(
     user_event_names = [ev.get("name") or ev.get("description", "") for ev in filtered]
     
     # 选择混淆事件
-    material_dir = os.path.join(os.path.dirname(output_dir) if output_dir else OUTPUT_DIR, "default")
+    material_root = resolve_backend_path(get_config_value("paths.material_library_root", "output"))
+    material_subdir = str(get_config_value("unity.confusion_material_subdir", "default"))
+    material_dir = os.path.join(material_root, material_subdir)
     confusion_events = _select_confusion_events(user_event_names, confusion_count, material_dir)
 
     def _flush_partial() -> None:
@@ -962,12 +965,15 @@ def generate_game_meta_flow(
             with open(output_flow, "w", encoding="utf-8") as f:
                 json.dump({"game_flow": game_flow}, f, ensure_ascii=False, indent=2)
 
+    volc_cfg = get_config_value("models.volcengine", {})
+    aigc_cfg = get_config_value("aigc", {})
+    # Config-managed: Volc credentials, option image generation knobs, and confusion material directory.
     option_image_generator = VolcEngineAIGCGenerator(
-        access_key=os.getenv("VOLC_ACCESS_KEY"),
-        secret_key=os.getenv("VOLC_SECRET_KEY"),
+        access_key=volc_cfg.get("access_key"),
+        secret_key=volc_cfg.get("secret_key"),
         output_dir=os.path.join(output_dir, "option_images"),
-        add_logo=False,
-        add_aigc_meta=True,
+        add_logo=bool(aigc_cfg.get("add_logo", False)),
+        add_aigc_meta=bool(aigc_cfg.get("add_aigc_meta", True)),
     )
 
     model = _load_embedding_model()

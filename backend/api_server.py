@@ -15,12 +15,14 @@ from flask import Flask, Response, jsonify, send_from_directory, request, abort
 import mimetypes
 from generate_unity_json import generate_game_meta_flow, validate_generated_assets
 from db import get_pipeline_state, get_video_record, get_latest_video_record, upsert_user_video, init_db, set_pipeline_state
+from runtime_config import get_config_value, resolve_backend_path
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_ROOT = os.path.join(APP_DIR, "output")
-DB_PATH = os.getenv("PIPELINE_DB_PATH", os.path.join(APP_DIR, "lifelog.db"))
-VIDEOS_DIR = os.path.join(APP_DIR, "videos")
-UPLOAD_CHUNKS_ROOT = os.path.join(APP_DIR, "upload_chunks")
+OUTPUT_ROOT = resolve_backend_path(get_config_value("paths.output_root", "output"))
+DB_PATH = resolve_backend_path(get_config_value("server.database_path", "lifelog.db"))
+VIDEOS_REL_DIR = str(get_config_value("paths.videos_dir", "videos"))
+VIDEOS_DIR = resolve_backend_path(VIDEOS_REL_DIR)
+UPLOAD_CHUNKS_ROOT = resolve_backend_path(get_config_value("paths.upload_chunks_dir", "upload_chunks"))
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -40,9 +42,9 @@ def _normalize_base_url(base_url: str) -> str:
 
 def _get_base_url() -> str:
     # 获取对外可访问的基础 URL（优先环境变量，否则使用请求 host）
-    env_base = os.getenv("API_BASE_URL")
-    if env_base:
-        return _normalize_base_url(env_base)
+    configured_base = get_config_value("server.api_base_url", "")
+    if configured_base:
+        return _normalize_base_url(configured_base)
     return _normalize_base_url(request.host_url)
 
 
@@ -630,7 +632,7 @@ def create_process_task():
         fields={
             "user_id": user_id,
             "video_name": video_name,
-            "video_path": os.path.join("videos", video_name),
+            "video_path": os.path.join(VIDEOS_REL_DIR, video_name),
             "status": "processing",
             "extracted_context_path": extracted_path,
             "gamemeta_path": game_meta_path,
@@ -945,5 +947,6 @@ def get_asset(user_id: str, subpath: str):
 if __name__ == "__main__":
     # 启动开发服务器
     init_db(DB_PATH)
-    port = int(os.getenv("PORT", "8000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    port = int(get_config_value("server.port", 8000))
+    host = str(get_config_value("server.host", "0.0.0.0"))
+    app.run(host=host, port=port, debug=True)

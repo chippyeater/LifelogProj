@@ -17,6 +17,7 @@ from pipeline_schema import (
     validate_stage2_schema,
     validate_stage3_schema,
 )
+from runtime_config import get_config_value, resolve_prompt_path
 
 logger = logging.getLogger(__name__)
 
@@ -357,22 +358,26 @@ class BailianVideoProcessor:
         self.video_url = video_url
         self.output_dir = output_dir
 
-        api_key = os.getenv("BAILIAN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        # Config-managed: model selection, token limits, temperatures, upload mode, and timeouts.
+        cfg = get_config_value("models.bailian", {})
+        api_key = cfg.get("api_key")
         if not api_key:
             raise ValueError("BAILIAN_API_KEY (or DASHSCOPE_API_KEY) not set.")
-        base_url = os.getenv("BAILIAN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        self.model = os.getenv("BAILIAN_MODEL", "qwen3.5-flash")
-        self.max_tokens = int(os.getenv("BAILIAN_MAX_TOKENS", "4096"))
-        self.temperature = float(os.getenv("BAILIAN_TEMPERATURE", "0.2"))
-        self.stage2_model = os.getenv("BAILIAN_STAGE2_MODEL", self.model)
-        self.stage2_max_tokens = int(os.getenv("BAILIAN_STAGE2_MAX_TOKENS", str(self.max_tokens)))
-        self.stage2_temperature = float(os.getenv("BAILIAN_STAGE2_TEMPERATURE", str(self.temperature)))
-        self.stage3_model = os.getenv("BAILIAN_STAGE3_MODEL", self.stage2_model)
-        self.stage3_max_tokens = int(os.getenv("BAILIAN_STAGE3_MAX_TOKENS", str(self.stage2_max_tokens)))
-        self.stage3_temperature = float(os.getenv("BAILIAN_STAGE3_TEMPERATURE", str(self.stage2_temperature)))
-        self.input_mode = os.getenv("BAILIAN_INPUT_MODE", "text")  # text | video
-        self.upload_api_url = os.getenv("BAILIAN_UPLOAD_API_URL", "https://dashscope.aliyuncs.com/api/v1/uploads")
-        self.use_temp_upload = os.getenv("BAILIAN_UPLOAD_TEMP", "0") == "1"
+        base_url = cfg.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.model = cfg.get("model", "qwen3.5-flash")
+        self.max_tokens = int(cfg.get("max_tokens", 4096))
+        self.temperature = float(cfg.get("temperature", 0.2))
+        self.stage2_model = cfg.get("stage2_model") or self.model
+        self.stage2_max_tokens = int(cfg.get("stage2_max_tokens", self.max_tokens))
+        self.stage2_temperature = float(cfg.get("stage2_temperature", self.temperature))
+        self.stage3_model = cfg.get("stage3_model") or self.stage2_model
+        self.stage3_max_tokens = int(cfg.get("stage3_max_tokens", self.stage2_max_tokens))
+        self.stage3_temperature = float(cfg.get("stage3_temperature", self.stage2_temperature))
+        self.input_mode = cfg.get("input_mode", "text")
+        self.upload_api_url = cfg.get("upload_api_url", "https://dashscope.aliyuncs.com/api/v1/uploads")
+        self.use_temp_upload = bool(cfg.get("use_temp_upload", False))
+        self.policy_timeout_seconds = float(cfg.get("policy_timeout_seconds", 60))
+        self.upload_timeout_seconds = float(cfg.get("upload_timeout_seconds", 300))
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self._api_key = api_key
@@ -402,7 +407,7 @@ class BailianVideoProcessor:
             "Content-Type": "application/json",
         }
         params = {"action": "getPolicy", "model": self.model}
-        resp = requests.get(self.upload_api_url, headers=headers, params=params, timeout=60)
+        resp = requests.get(self.upload_api_url, headers=headers, params=params, timeout=self.policy_timeout_seconds)
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to get upload policy: {resp.status_code} {resp.text}")
         data = resp.json().get("data")
@@ -445,7 +450,7 @@ class BailianVideoProcessor:
                 "success_action_status": (None, "200"),
                 "file": (file_name, f),
             }
-            resp = requests.post(policy_data["upload_host"], files=files, timeout=300)
+            resp = requests.post(policy_data["upload_host"], files=files, timeout=self.upload_timeout_seconds)
             if resp.status_code != 200:
                 raise RuntimeError(f"Failed to upload file: {resp.status_code} {resp.text}")
         logger.info("File uploaded to Bailian temp OSS, status: %s", resp.status_code)
@@ -565,7 +570,7 @@ class BailianVideoProcessor:
         """
         涓€娆℃€ц幏寰梕xtracted_context
         """
-        with open("prompts/full_context_prompt.md", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("full_context"), "r", encoding="utf-8") as f:
             template = Template(f.read())
             prompt = template.render(
                 activity=ctx.activity,
@@ -640,7 +645,7 @@ class BailianVideoProcessor:
 
     def analyze_stage1_video_parse(self, ctx: ActivityContext) -> Dict[str, Any]:
         # 闃舵1涓撶敤瑙ｆ瀽锛氬彧杈撳嚭灞€閮ㄦ椂闂磋酱鍜屽叧閿抚缁戝畾缁撴灉
-        with open("prompts/stage1_video_parse_prompt.md", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("stage1_video_parse"), "r", encoding="utf-8") as f:
             template = Template(f.read())
             prompt = template.render(
                 activity=ctx.activity,
@@ -667,7 +672,7 @@ class BailianVideoProcessor:
 
     def analyze_stage2_event_rebuild(self, stage1_output: Dict[str, Any]) -> Dict[str, Any]:
         # 阶段2合并完成事件重建和最终实体筛选，不再拆成单独的 entity stage
-        with open("prompts/stage2_event_rebuild_prompt.md", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("stage2_event_rebuild"), "r", encoding="utf-8") as f:
             template = Template(f.read())
             prompt = template.render(
                 stage1_json=json.dumps(stage1_output, ensure_ascii=False, indent=2),
@@ -696,7 +701,7 @@ class BailianVideoProcessor:
         stage2_output: Dict[str, Any],
     ) -> Dict[str, Any]:
         # 阶段3按实体生成单点细节题，只消费阶段1证据帧和阶段2最终实体
-        with open("prompts/stage3_detail_generate_prompt.md", "r", encoding="utf-8") as f:
+        with open(resolve_prompt_path("stage3_detail_generate"), "r", encoding="utf-8") as f:
             template = Template(f.read())
 
         out_dir = os.path.join(self.output_dir, "bailian")
