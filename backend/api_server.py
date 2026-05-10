@@ -5,6 +5,7 @@ import hashlib
 import time
 import logging
 import re
+import shutil
 import sys
 import uuid
 import subprocess
@@ -18,6 +19,8 @@ from db import get_pipeline_state, get_video_record, get_latest_video_record, up
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_ROOT = os.path.join(APP_DIR, "output")
 DB_PATH = os.getenv("PIPELINE_DB_PATH", os.path.join(APP_DIR, "lifelog.db"))
+VIDEOS_DIR = os.path.join(APP_DIR, "videos")
+UPLOAD_CHUNKS_ROOT = os.path.join(APP_DIR, "upload_chunks")
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -153,16 +156,123 @@ def _write_status_json(user_id: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def _save_uploaded_video(file_storage, user_id: str, task_id: str) -> str:
-    videos_dir = os.path.join(APP_DIR, "videos")
-    os.makedirs(videos_dir, exist_ok=True)
-    original_name = os.path.basename((getattr(file_storage, "filename", "") or "").strip())
+def _chunk_dir(identifier: str) -> str:
+    safe_identifier = _safe_name_component(identifier, "upload")
+    return os.path.join(UPLOAD_CHUNKS_ROOT, safe_identifier)
+
+
+def _parse_positive_int(raw_value: Optional[str], field_name: str, *, allow_zero: bool = False) -> int:
+    try:
+        value = int((raw_value or "").strip())
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError(f"{field_name} must be an integer")
+    if allow_zero:
+        if value < 0:
+            raise ValueError(f"{field_name} must be >= 0")
+    elif value <= 0:
+        raise ValueError(f"{field_name} must be > 0")
+    return value
+
+
+def _build_video_name(original_name: str, user_id: str, task_id: str) -> str:
+    original_name = os.path.basename((original_name or "").strip())
     stem, ext = os.path.splitext(original_name)
     ext = ext or ".mp4"
     safe_stem = _safe_name_component(stem, "upload")
     video_name = f"{_safe_name_component(user_id, 'user')}_{task_id}_{safe_stem}{ext}"
-    save_path = os.path.join(videos_dir, video_name)
+    return video_name
+
+
+def _save_uploaded_video(file_storage, user_id: str, task_id: str) -> str:
+    os.makedirs(VIDEOS_DIR, exist_ok=True)
+    video_name = _build_video_name(getattr(file_storage, "filename", ""), user_id, task_id)
+    save_path = os.path.join(VIDEOS_DIR, video_name)
     file_storage.save(save_path)
+    return video_name
+
+
+def _save_chunk_upload(*, chunk_storage, identifier: str, filename: str, chunk_index: int, total_chunks: int) -> None:
+    chunk_dir = _chunk_dir(identifier)
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    metadata_path = os.path.join(chunk_dir, "meta.json")
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception:
+            metadata = {}
+        recorded_total = metadata.get("totalChunks")
+        recorded_filename = metadata.get("filename")
+        if recorded_total is not None and int(recorded_total) != total_chunks:
+            raise ValueError("totalChunks does not match existing upload session")
+        if recorded_filename and recorded_filename != filename:
+            raise ValueError("filename does not match existing upload session")
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "identifier": identifier,
+                "filename": filename,
+                "totalChunks": total_chunks,
+                "updatedAt": _utc_now_iso(),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    chunk_path = os.path.join(chunk_dir, str(chunk_index))
+    chunk_storage.save(chunk_path)
+
+
+def _cleanup_chunk_dir(identifier: str) -> None:
+    chunk_dir = _chunk_dir(identifier)
+    if os.path.isdir(chunk_dir):
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+
+
+def _assemble_chunked_video(identifier: str, original_filename: str, user_id: str, task_id: str) -> str:
+    chunk_dir = _chunk_dir(identifier)
+    if not os.path.isdir(chunk_dir):
+        raise FileNotFoundError("chunk upload session not found")
+
+    metadata_path = os.path.join(chunk_dir, "meta.json")
+    metadata = {}
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception:
+            metadata = {}
+
+    total_chunks = metadata.get("totalChunks")
+    if total_chunks is None:
+        raise ValueError("chunk metadata is missing totalChunks")
+    total_chunks = _parse_positive_int(str(total_chunks), "totalChunks")
+
+    resolved_filename = (original_filename or metadata.get("filename") or "").strip()
+    if not resolved_filename:
+        raise ValueError("videoFilename is required for chunk assembly")
+
+    os.makedirs(VIDEOS_DIR, exist_ok=True)
+    video_name = _build_video_name(resolved_filename, user_id, task_id)
+    output_path = os.path.join(VIDEOS_DIR, video_name)
+
+    try:
+        with open(output_path, "wb") as output_file:
+            for chunk_index in range(total_chunks):
+                chunk_path = os.path.join(chunk_dir, str(chunk_index))
+                if not os.path.exists(chunk_path):
+                    raise FileNotFoundError(f"missing chunk {chunk_index}")
+                with open(chunk_path, "rb") as chunk_file:
+                    shutil.copyfileobj(chunk_file, output_file, length=1024 * 1024)
+    except Exception:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise
+
+    _cleanup_chunk_dir(identifier)
     return video_name
 
 
@@ -175,6 +285,8 @@ def _launch_pipeline_process(
     activity_time: str,
     location: str,
 ) -> None:
+    logger.info("Launching pipeline process for user=%s video=%s", user_id, video_name)
+    return
     cmd = [
         sys.executable,
         os.path.join(APP_DIR, "run_pipeline.py"),
@@ -182,6 +294,7 @@ def _launch_pipeline_process(
         user_id,
         "--video",
         video_name,
+        "--compress-video",
         "--pipeline-mode",
         "full_context",
         "--activity",
@@ -442,12 +555,54 @@ def _build_job_status_from_status_doc(base_url: str, user_id: str, status_doc: D
     }
 
 
+@app.post("/api/tasks/upload-chunk")
+def upload_chunk():
+    chunk_file = request.files.get("chunk")
+    if chunk_file is None:
+        return _json_response({"ok": False, "error": "chunk is required"}, 400)
+
+    identifier = (request.form.get("identifier") or "").strip()
+    filename = os.path.basename((request.form.get("filename") or "").strip())
+    if not identifier:
+        return _json_response({"ok": False, "error": "identifier is required"}, 400)
+    if not filename:
+        return _json_response({"ok": False, "error": "filename is required"}, 400)
+
+    try:
+        chunk_index = _parse_positive_int(request.form.get("chunkIndex"), "chunkIndex", allow_zero=True)
+        total_chunks = _parse_positive_int(request.form.get("totalChunks"), "totalChunks")
+        if chunk_index >= total_chunks:
+            raise ValueError("chunkIndex must be less than totalChunks")
+        _save_chunk_upload(
+            chunk_storage=chunk_file,
+            identifier=identifier,
+            filename=filename,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+        )
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, 400)
+
+    return _json_response(
+        {
+            "ok": True,
+            "identifier": identifier,
+            "filename": filename,
+            "chunkIndex": chunk_index,
+            "totalChunks": total_chunks,
+        },
+        201,
+    )
+
+
 @app.post("/api/tasks/process")
 def create_process_task():
     user_id = (request.form.get("user") or "default").strip() or "default"
     uploaded_video = request.files.get("video")
-    if uploaded_video is None or not getattr(uploaded_video, "filename", ""):
-        return _json_response({"ok": False, "error": "video is required"}, 400)
+    video_identifier = (request.form.get("videoIdentifier") or "").strip()
+    video_filename = os.path.basename((request.form.get("videoFilename") or "").strip())
+    if (uploaded_video is None or not getattr(uploaded_video, "filename", "")) and not video_identifier:
+        return _json_response({"ok": False, "error": "video or videoIdentifier is required"}, 400)
 
     activity = (request.form.get("activity") or "逛超市").strip() or "逛超市"
     people = (request.form.get("people") or "我").strip() or "我"
@@ -457,7 +612,14 @@ def create_process_task():
 
     task_id = _make_task_id(user_id)
     job_id = task_id
-    video_name = _save_uploaded_video(uploaded_video, user_id, task_id)
+    try:
+        if uploaded_video is not None and getattr(uploaded_video, "filename", ""):
+            video_name = _save_uploaded_video(uploaded_video, user_id, task_id)
+        else:
+            video_name = _assemble_chunked_video(video_identifier, video_filename, user_id, task_id)
+    except (ValueError, FileNotFoundError) as exc:
+        return _json_response({"ok": False, "error": str(exc)}, 400)
+
     extracted_path, game_meta_path, game_flow_path = _resolve_paths(user_id)
 
     init_db(DB_PATH)
