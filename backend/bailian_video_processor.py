@@ -4,6 +4,7 @@ import inspect
 import logging
 import base64
 import mimetypes
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -20,6 +21,41 @@ from pipeline_schema import (
 from runtime_config import get_config_value, resolve_prompt_path
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_VIDEO_SIZE_BYTES = 2 * 1024 * 1024 * 1024
+MODEL_VIDEO_LIMITS = (
+    (("qwen3.6-plus", "qwen3.6-flash", "qwen3.5-plus", "qwen3.5-flash"), 2 * 60 * 60, DEFAULT_MAX_VIDEO_SIZE_BYTES),
+    (("qwen3-vl-plus", "qwen3-vl-flash"), 60 * 60, DEFAULT_MAX_VIDEO_SIZE_BYTES),
+    (("qwen3.5-omni-plus", "qwen3.5-omni-flash"), 60 * 60, DEFAULT_MAX_VIDEO_SIZE_BYTES),
+)
+
+
+def _resolve_model_video_limits(model_name: str) -> tuple[int | None, int | None]:
+    normalized = (model_name or "").strip().lower()
+    for prefixes, max_duration_seconds, max_size_bytes in MODEL_VIDEO_LIMITS:
+        if any(normalized.startswith(prefix) for prefix in prefixes):
+            return max_duration_seconds, max_size_bytes
+    return None, None
+
+
+def _probe_local_video_duration_seconds(video_path: str) -> float | None:
+    ffprobe = str(get_config_value("binaries.ffprobe_bin", "ffprobe"))
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        output = (result.stdout or "").strip()
+        return float(output) if output else None
+    except Exception:
+        return None
 
 
 def _normalize_stage1_video_parse(data: Dict[str, Any], ctx: ActivityContext) -> Dict[str, Any]:
@@ -357,6 +393,7 @@ class BailianVideoProcessor:
             raise ValueError("video_url or video_path is required for Bailian processing.")
         self.video_url = video_url
         self.output_dir = output_dir
+        self.local_video_path = video_path
 
         # Config-managed: model selection, token limits, temperatures, upload mode, and timeouts.
         cfg = get_config_value("models.bailian", {})
@@ -378,6 +415,8 @@ class BailianVideoProcessor:
         self.use_temp_upload = bool(cfg.get("use_temp_upload", False))
         self.policy_timeout_seconds = float(cfg.get("policy_timeout_seconds", 60))
         self.upload_timeout_seconds = float(cfg.get("upload_timeout_seconds", 300))
+        self.max_video_duration_seconds = cfg.get("max_video_duration_seconds")
+        self.max_video_size_bytes = cfg.get("max_video_size_bytes")
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self._api_key = api_key
@@ -396,10 +435,45 @@ class BailianVideoProcessor:
             self.stage3_temperature,
         )
 
+        if self.local_video_path:
+            self._validate_local_video_limits(self.local_video_path)
+
         if not self.video_url and video_path and self.use_temp_upload:
             self.video_url = self._upload_local_file_to_temp_oss(video_path)
+        if not self.video_url and video_path and not self.use_temp_upload:
+            raise ValueError(
+                "Bailian requires a video_url, but models.bailian.use_temp_upload is false and no existing video_url was found."
+            )
         if not self.video_url:
-            raise ValueError("video_url is required for Bailian processing after upload.")
+            raise ValueError("video_url is required for Bailian processing.")
+
+    def _validate_local_video_limits(self, video_path: str) -> None:
+        model_duration_limit, model_size_limit = _resolve_model_video_limits(self.model)
+        max_duration_seconds = int(self.max_video_duration_seconds) if self.max_video_duration_seconds is not None else model_duration_limit
+        max_size_bytes = int(self.max_video_size_bytes) if self.max_video_size_bytes is not None else model_size_limit
+        if max_duration_seconds is None and max_size_bytes is None:
+            return
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+
+        file_size_bytes = os.path.getsize(video_path)
+        if max_size_bytes is not None and file_size_bytes > max_size_bytes:
+            raise ValueError(
+                f"Video file too large for model {self.model}: "
+                f"{file_size_bytes / (1024 * 1024 * 1024):.2f}GB > {max_size_bytes / (1024 * 1024 * 1024):.0f}GB"
+            )
+
+        duration_seconds = _probe_local_video_duration_seconds(video_path)
+        if max_duration_seconds is not None:
+            if duration_seconds is None:
+                raise ValueError(
+                    f"Unable to determine video duration for model limit validation: {video_path}"
+                )
+            if duration_seconds > max_duration_seconds:
+                raise ValueError(
+                    f"Video duration exceeds model {self.model} limit: "
+                    f"{duration_seconds / 3600:.2f}h > {max_duration_seconds / 3600:.0f}h"
+                )
 
     def _get_upload_policy(self) -> dict:
         headers = {

@@ -2,10 +2,14 @@ import copy
 import json
 import os
 from typing import Any, Dict
+from dotenv import load_dotenv
 
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(BACKEND_DIR, "runtime_config.json")
+DOTENV_PATH = os.path.join(BACKEND_DIR, ".env")
+
+load_dotenv(dotenv_path=DOTENV_PATH)
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -21,6 +25,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "upload_chunks_dir": "upload_chunks",
         "prompts_dir": "prompts",
         "temp_dir": "tmp",
+        "huggingface_root": "",
         "pipeline_cache_dirname": "pipeline_cache",
         "logs_dirname": "logs",
         "siliconflow_log_path": "output/siliconflow_responses.txt",
@@ -50,11 +55,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "frame_rate": 15,
             "video_codec": "libx264",
             "video_bitrate": "2M",
+            "video_pixel_format": "yuv420p",
+            "video_profile": "high",
+            "video_level": "4.0",
             "audio_codec": "aac",
             "audio_bitrate": "128k",
             "preset": "",
             "overwrite": True,
             "keep_audio": True,
+            "movflags": "+faststart",
             "output_subdir": "compressed",
             "filename_prefix": "compressed",
         },
@@ -101,9 +110,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "stage3_temperature": 0.2,
             "input_mode": "text",
             "upload_api_url": "https://dashscope.aliyuncs.com/api/v1/uploads",
-            "use_temp_upload": False,
+            "use_temp_upload": True,
             "policy_timeout_seconds": 60,
             "upload_timeout_seconds": 300,
+            "max_video_duration_seconds": None,
+            "max_video_size_bytes": None,
         },
         "embedding": {
             "model_name": "moka-ai/m3e-base",
@@ -146,31 +157,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
-ENV_OVERRIDES = {
-    "server.api_base_url": "API_BASE_URL",
-    "server.database_path": "PIPELINE_DB_PATH",
-    "server.port": "PORT",
-    "binaries.ffmpeg_bin": "FFMPEG_BIN",
-    "binaries.ffprobe_bin": "FFPROBE_BIN",
+ENV_ONLY_OVERRIDES = {
     "models.siliconflow.api_key": "SILICONFLOW_API_KEY",
-    "models.siliconflow.model": "SILICONFLOW_MODEL",
-    "models.siliconflow.log_path": "SILICONFLOW_LOG_PATH",
     "models.bailian.api_key": "BAILIAN_API_KEY",
-    "models.bailian.base_url": "BAILIAN_BASE_URL",
-    "models.bailian.model": "BAILIAN_MODEL",
-    "models.bailian.max_tokens": "BAILIAN_MAX_TOKENS",
-    "models.bailian.temperature": "BAILIAN_TEMPERATURE",
-    "models.bailian.stage2_model": "BAILIAN_STAGE2_MODEL",
-    "models.bailian.stage2_max_tokens": "BAILIAN_STAGE2_MAX_TOKENS",
-    "models.bailian.stage2_temperature": "BAILIAN_STAGE2_TEMPERATURE",
-    "models.bailian.stage3_model": "BAILIAN_STAGE3_MODEL",
-    "models.bailian.stage3_max_tokens": "BAILIAN_STAGE3_MAX_TOKENS",
-    "models.bailian.stage3_temperature": "BAILIAN_STAGE3_TEMPERATURE",
-    "models.bailian.input_mode": "BAILIAN_INPUT_MODE",
-    "models.bailian.upload_api_url": "BAILIAN_UPLOAD_API_URL",
     "models.volcengine.access_key": "VOLC_ACCESS_KEY",
     "models.volcengine.secret_key": "VOLC_SECRET_KEY",
 }
+
+SENSITIVE_CONFIG_PATHS = tuple(ENV_ONLY_OVERRIDES.keys())
 
 
 _FILE_CONFIG_CACHE: Dict[str, Any] | None = None
@@ -230,7 +224,11 @@ def _load_file_config() -> Dict[str, Any]:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError(f"Runtime config must be a JSON object: {config_path}")
-    return _deep_merge(DEFAULT_CONFIG, payload)
+    merged = _deep_merge(DEFAULT_CONFIG, payload)
+    for dotted_path in SENSITIVE_CONFIG_PATHS:
+        default_value = _get_nested(DEFAULT_CONFIG, dotted_path)
+        _set_nested(merged, dotted_path, copy.deepcopy(default_value))
+    return merged
 
 
 def get_runtime_config(force_reload: bool = False) -> Dict[str, Any]:
@@ -238,7 +236,7 @@ def get_runtime_config(force_reload: bool = False) -> Dict[str, Any]:
     if force_reload or _FILE_CONFIG_CACHE is None:
         _FILE_CONFIG_CACHE = _load_file_config()
     config = copy.deepcopy(_FILE_CONFIG_CACHE)
-    for dotted_path, env_name in ENV_OVERRIDES.items():
+    for dotted_path, env_name in ENV_ONLY_OVERRIDES.items():
         raw_value = os.getenv(env_name)
         if raw_value is None or raw_value == "":
             continue
@@ -253,6 +251,18 @@ def get_runtime_config(force_reload: bool = False) -> Dict[str, Any]:
 
 def get_config_value(dotted_path: str, default: Any = None) -> Any:
     return _get_nested(get_runtime_config(), dotted_path, default)
+
+
+def apply_huggingface_cache_config() -> str:
+    root = str(get_config_value("paths.huggingface_root", "") or "").strip()
+    if not root:
+        return ""
+    resolved_root = resolve_backend_path(root)
+    os.environ["HF_HOME"] = resolved_root
+    os.environ["HUGGINGFACE_HUB_CACHE"] = os.path.join(resolved_root, "hub")
+    os.environ["TRANSFORMERS_CACHE"] = os.path.join(resolved_root, "transformers")
+    os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.path.join(resolved_root, "sentence_transformers")
+    return resolved_root
 
 
 def resolve_backend_path(path_value: str | None) -> str:

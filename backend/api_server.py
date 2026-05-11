@@ -288,7 +288,6 @@ def _launch_pipeline_process(
     location: str,
 ) -> None:
     logger.info("Launching pipeline process for user=%s video=%s", user_id, video_name)
-    return
     cmd = [
         sys.executable,
         os.path.join(APP_DIR, "run_pipeline.py"),

@@ -1,3 +1,4 @@
+dotenv
 Flask==3.1.2
 Jinja2==3.1.6
 numpy==2.2.6
@@ -8,3 +9,4 @@ requests==2.32.5
 sentence-transformers
 edge-tts
 volcengine
+

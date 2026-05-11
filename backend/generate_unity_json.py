@@ -21,11 +21,18 @@ from dotenv import load_dotenv
 # 先加载 .env，确保 HF_* 缓存配置在模型/Hub 导入前生效
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
+from runtime_config import (
+    apply_huggingface_cache_config,
+    get_config_value,
+    resolve_backend_path,
+)
+
+apply_huggingface_cache_config()
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from llm_client import SiliconFlowLLM
 from clue_aigc_generator import VolcEngineAIGCGenerator
-from runtime_config import get_config_value, resolve_backend_path
 from utils.media_export import (
     build_asset_relative_path,
     clamp_media_range,

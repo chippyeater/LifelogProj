@@ -36,7 +36,7 @@ TASK_STATUS_FILENAME = "status.json"
 
 
 def _utc_now_iso() -> str:
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _status_path(output_root: str, user_id: str) -> str:
@@ -566,7 +566,15 @@ def main() -> None:
             str(compression_cfg.get("video_codec", "libx264")),
             "-b:v",
             str(compression_cfg.get("video_bitrate", "2M")),
+            "-pix_fmt",
+            str(compression_cfg.get("video_pixel_format", "yuv420p")),
         ]
+        video_profile = str(compression_cfg.get("video_profile", "") or "").strip()
+        if video_profile:
+            cmd.extend(["-profile:v", video_profile])
+        video_level = str(compression_cfg.get("video_level", "") or "").strip()
+        if video_level:
+            cmd.extend(["-level:v", video_level])
         preset = str(compression_cfg.get("preset", "") or "").strip()
         if preset:
             cmd.extend(["-preset", preset])
@@ -581,10 +589,18 @@ def main() -> None:
             )
         else:
             cmd.append("-an")
+        movflags = str(compression_cfg.get("movflags", "") or "").strip()
+        if movflags:
+            cmd.extend(["-movflags", movflags])
         cmd.append(
             output_path,
         )
-        subprocess.run(cmd, check=True)
+        logger.info("Running ffmpeg compression command: %s", subprocess.list2cmdline(cmd))
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if result.stdout and result.stdout.strip():
+            logger.info("ffmpeg stdout:\n%s", result.stdout.strip())
+        if result.stderr and result.stderr.strip():
+            logger.info("ffmpeg stderr:\n%s", result.stderr.strip())
 
     try:
         if args.compress_video:

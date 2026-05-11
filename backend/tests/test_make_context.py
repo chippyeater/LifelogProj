@@ -32,6 +32,11 @@ class MakeContextTest(unittest.TestCase):
     def tearDown(self):
         clear_temp_root()
 
+    def test_sanitize_filename_component_preserves_chinese(self):
+        self.assertEqual(make_context._sanitize_filename_component("苹果"), "苹果")
+        self.assertEqual(make_context._sanitize_filename_component("香蕉 1"), "香蕉_1")
+        self.assertEqual(make_context._sanitize_filename_component(':/\\*?"<>|'), "unknown")
+
     def test_execute_video_processor_single_call_writes_checkpoint(self):
         sample_path = Path("output") / "001" / "extracted_context.json"
         payload = json.loads(sample_path.read_text(encoding="utf-8"))

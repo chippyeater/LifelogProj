@@ -40,8 +40,10 @@ def _normalize_path(path: Optional[str]) -> Optional[str]:
 def _sanitize_filename_component(text: Optional[str], max_len: int = 24) -> str:
     if not text:
         return "unknown"
-    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", str(text))
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    cleaned = str(text).strip()
+    # Preserve readable Unicode names; only strip characters that are invalid in Windows filenames.
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", cleaned)
+    cleaned = re.sub(r"\s+", "_", cleaned).strip(" ._")
     return (cleaned or "unknown")[:max_len]
 
 def _to_relative_asset_path(path: Optional[str]) -> Optional[str]:

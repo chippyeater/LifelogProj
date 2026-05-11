@@ -11,14 +11,15 @@
     "upload_chunks_dir": "upload_chunks",
     "prompts_dir": "prompts",
     "temp_dir": "tmp",
+    "huggingface_root": ".cache/huggingface",
     "pipeline_cache_dirname": "pipeline_cache",
     "logs_dirname": "logs",
     "siliconflow_log_path": "output/siliconflow_responses.txt",
     "material_library_root": "output"
   },
   "binaries": {
-    "ffmpeg_bin": "ffmpeg",
-    "ffprobe_bin": "ffprobe"
+    "ffmpeg_bin": "D:\\InstallPackage\\ffmpeg-2026-04-22-git-162ad61486-essentials_build\\ffmpeg-2026-04-22-git-162ad61486-essentials_build\\bin\\ffmpeg.exe",
+    "ffprobe_bin": "D:\\InstallPackage\\ffmpeg-2026-04-22-git-162ad61486-essentials_build\\ffmpeg-2026-04-22-git-162ad61486-essentials_build\\bin\\ffprobe.exe"
   },
   "pipeline": {
     "default_activity": "shopping",
@@ -26,7 +27,7 @@
     "default_time": "2024-01-05 15:00",
     "default_location": "supermarket",
     "output_root": "output",
-    "pipeline_mode": "staged",
+    "pipeline_mode": "full_context",
     "start_stage": 1,
     "end_stage": null,
     "confusion_count": 2,
@@ -34,17 +35,21 @@
   },
   "video_processing": {
     "compression": {
-      "enabled_by_default": false,
+      "enabled_by_default": true,
       "scale_width": -2,
       "scale_height": 720,
-      "frame_rate": 15,
+      "frame_rate": 8,
       "video_codec": "libx264",
-      "video_bitrate": "2M",
+      "video_bitrate": "3M",
+      "video_pixel_format": "yuv420p",
+      "video_profile": "high",
+      "video_level": "4.0",
       "audio_codec": "aac",
       "audio_bitrate": "128k",
       "preset": "",
       "overwrite": true,
       "keep_audio": true,
+      "movflags": "+faststart",
       "output_subdir": "compressed",
       "filename_prefix": "compressed"
     },
@@ -68,7 +73,6 @@
   },
   "models": {
     "siliconflow": {
-      "api_key": "",
       "base_url": "https://api.siliconflow.cn/v1",
       "model": "tencent/Hunyuan-MT-7B",
       "temperature": 0.2,
@@ -78,9 +82,8 @@
       "log_path": "output/siliconflow_responses.txt"
     },
     "bailian": {
-      "api_key": "",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen3.5-flash",
+      "model": "qwen3.5-omni-flash",
       "max_tokens": 4096,
       "temperature": 0.2,
       "stage2_model": "",
@@ -89,20 +92,18 @@
       "stage3_model": "",
       "stage3_max_tokens": 4096,
       "stage3_temperature": 0.2,
-      "input_mode": "text",
+      "input_mode": "video",
       "upload_api_url": "https://dashscope.aliyuncs.com/api/v1/uploads",
-      "use_temp_upload": false,
+      "use_temp_upload": true,
       "policy_timeout_seconds": 60,
-      "upload_timeout_seconds": 300
+      "upload_timeout_seconds": 300,
+      "max_video_duration_seconds": null,
+      "max_video_size_bytes": null
     },
     "embedding": {
       "model_name": "moka-ai/m3e-base",
       "event_similarity_threshold": 0.9,
       "entity_similarity_threshold": 0.9
-    },
-    "volcengine": {
-      "access_key": "",
-      "secret_key": ""
     }
   },
   "aigc": {
