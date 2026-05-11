@@ -159,13 +159,69 @@ class ApiServerTest(unittest.TestCase):
             },
         ]
 
-        with patch.object(api_server, "list_users", return_value=users):
+        with patch.object(api_server, "list_users", return_value=users), \
+             patch.object(api_server, "_read_status_json", return_value={}):
             response = self.client.get("/api/users")
 
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertTrue(data["ok"])
-        self.assertEqual(data["users"], users)
+        self.assertEqual(
+            data["users"],
+            [
+                {
+                    "id": "001",
+                    "userId": "001",
+                    "name": "Alice",
+                    "userName": "Alice",
+                    "status": "processing",
+                    "processingProgress": 0,
+                    "updated_at": "2026-05-11T10:00:00Z",
+                },
+                {
+                    "id": "002",
+                    "userId": "002",
+                    "name": "Bob",
+                    "userName": "Bob",
+                    "status": "all_ready",
+                    "processingProgress": 100,
+                    "updated_at": "2026-05-11T09:00:00Z",
+                },
+            ],
+        )
+
+    def test_get_users_prefers_status_json_progress(self):
+        users = [
+            {
+                "id": "001",
+                "name": "Alice",
+                "status": "processing",
+                "updated_at": "2026-05-11T10:00:00Z",
+            }
+        ]
+        status_doc = {
+            "status": "processing",
+            "progress": 65,
+            "updated_at": "2026-05-11T10:05:00Z",
+            "pipeline_state": {
+                "events": "done",
+                "entities": "done",
+                "frames": "done",
+                "aigc": "pending",
+                "unity": "pending",
+                "last_error": None,
+            },
+        }
+
+        with patch.object(api_server, "list_users", return_value=users), \
+             patch.object(api_server, "_read_status_json", return_value=status_doc):
+            response = self.client.get("/api/users")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["users"][0]["status"], "processing")
+        self.assertEqual(data["users"][0]["processingProgress"], 65)
+        self.assertEqual(data["users"][0]["updated_at"], "2026-05-11T10:05:00Z")
 
     def test_job_status_prefers_status_json(self):
         tmp_root = self._tmp_dir()

@@ -565,6 +565,50 @@ def _build_job_status_from_status_doc(base_url: str, user_id: str, status_doc: D
     }
 
 
+def _build_user_list_item(base_user: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = (base_user.get("id") or "").strip()
+    user_name = (base_user.get("name") or user_id).strip() or user_id
+    status_doc = _read_status_json(user_id)
+
+    status = (base_user.get("status") or "pending").strip() or "pending"
+    progress = 0
+    updated_at = base_user.get("updated_at")
+
+    if status_doc:
+        status = (status_doc.get("status") or status).strip() or status
+        updated_at = status_doc.get("updated_at") or updated_at
+        progress = status_doc.get("progress")
+        if not isinstance(progress, int):
+            pipeline_state = dict(_default_pipeline_state())
+            pipeline_state.update(status_doc.get("pipeline_state") or {})
+            progress = _pipeline_progress_percent(pipeline_state, status)
+    else:
+        latest_video = get_latest_video_record(DB_PATH, user_id)
+        if latest_video:
+            status = (latest_video.get("status") or status).strip() or status
+            updated_at = latest_video.get("updated_at") or updated_at
+            video_name = latest_video.get("video_name") or ""
+            if video_name:
+                pipeline_state = get_pipeline_state(DB_PATH, user_id, video_name)
+                progress = _pipeline_progress_percent(pipeline_state, status)
+
+    if status == "all_ready":
+        progress = 100
+    if not isinstance(progress, int):
+        progress = 0
+    progress = max(0, min(100, progress))
+
+    return {
+        "id": user_id,
+        "userId": user_id,
+        "name": user_name,
+        "userName": user_name,
+        "status": status,
+        "processingProgress": progress,
+        "updated_at": updated_at,
+    }
+
+
 @app.post("/api/tasks/upload-chunk")
 def upload_chunk():
     chunk_file = request.files.get("chunk")
@@ -713,7 +757,8 @@ def health():
 @app.get("/api/users")
 def get_users():
     init_db(DB_PATH)
-    return _json_response({"ok": True, "users": list_users(DB_PATH)})
+    users = [_build_user_list_item(user) for user in list_users(DB_PATH)]
+    return _json_response({"ok": True, "users": users})
 
 
 @app.get("/api/game-meta")
