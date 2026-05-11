@@ -14,7 +14,16 @@ from typing import Tuple, Dict, Any, Optional
 from flask import Flask, Response, jsonify, send_from_directory, request, abort
 import mimetypes
 from generate_unity_json import generate_game_meta_flow, validate_generated_assets
-from db import get_pipeline_state, get_video_record, get_latest_video_record, upsert_user_video, init_db, set_pipeline_state
+from db import (
+    get_pipeline_state,
+    get_video_record,
+    get_latest_video_record,
+    list_users,
+    upsert_user,
+    upsert_user_video,
+    init_db,
+    set_pipeline_state,
+)
 from runtime_config import get_config_value, resolve_backend_path
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -599,6 +608,7 @@ def upload_chunk():
 @app.post("/api/tasks/process")
 def create_process_task():
     user_id = (request.form.get("user") or "default").strip() or "default"
+    user_name = (request.form.get("userName") or "").strip() or user_id
     uploaded_video = request.files.get("video")
     video_identifier = (request.form.get("videoIdentifier") or "").strip()
     video_filename = os.path.basename((request.form.get("videoFilename") or "").strip())
@@ -624,6 +634,7 @@ def create_process_task():
     extracted_path, game_meta_path, game_flow_path = _resolve_paths(user_id)
 
     init_db(DB_PATH)
+    upsert_user(DB_PATH, user_id, user_name=user_name, status="processing")
     upsert_user_video(
         DB_PATH,
         user_id=user_id,
@@ -697,6 +708,12 @@ def create_process_task():
 def health():
     # 健康检查接口
     return jsonify({"status": "ok"})
+
+
+@app.get("/api/users")
+def get_users():
+    init_db(DB_PATH)
+    return _json_response({"ok": True, "users": list_users(DB_PATH)})
 
 
 @app.get("/api/game-meta")

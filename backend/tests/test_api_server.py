@@ -143,6 +143,30 @@ class ApiServerTest(unittest.TestCase):
     def setUp(self):
         self.client = api_server.app.test_client()
 
+    def test_get_users_returns_basic_user_list(self):
+        users = [
+            {
+                "id": "001",
+                "name": "Alice",
+                "status": "processing",
+                "updated_at": "2026-05-11T10:00:00Z",
+            },
+            {
+                "id": "002",
+                "name": "Bob",
+                "status": "all_ready",
+                "updated_at": "2026-05-11T09:00:00Z",
+            },
+        ]
+
+        with patch.object(api_server, "list_users", return_value=users):
+            response = self.client.get("/api/users")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["users"], users)
+
     def test_job_status_prefers_status_json(self):
         tmp_root = self._tmp_dir()
         user_dir = os.path.join(tmp_root, "001")

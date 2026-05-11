@@ -71,6 +71,18 @@ def init_db(db_path: str) -> None:
     with closing(_connect(db_path)) as conn:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                user_name TEXT,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_pipeline (
                 user_id TEXT PRIMARY KEY,
                 video_path TEXT,
@@ -186,6 +198,68 @@ def init_db(db_path: str) -> None:
                 conn.execute("ALTER TABLE user_videos ADD COLUMN pipeline_state TEXT")
         except Exception:
             pass
+        try:
+            now = _utc_now_iso()
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO users (user_id, user_name, status, created_at, updated_at)
+                SELECT DISTINCT
+                    user_id,
+                    user_id,
+                    COALESCE(NULLIF(TRIM(status), ''), 'pending'),
+                    ?,
+                    ?
+                FROM user_videos
+                WHERE user_id IS NOT NULL AND TRIM(user_id) <> ''
+                """,
+                (now, now),
+            )
+        except Exception:
+            pass
+        conn.commit()
+
+
+def upsert_user(
+    db_path: str,
+    user_id: Optional[str],
+    *,
+    user_name: Optional[str] = None,
+    status: Optional[str] = None,
+) -> None:
+    if not user_id:
+        return
+    now = _utc_now_iso()
+    normalized_name = (user_name or "").strip() or user_id
+    with closing(_connect(db_path)) as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM users WHERE user_id = ? LIMIT 1",
+            (user_id,),
+        )
+        exists = cur.fetchone() is not None
+        if exists:
+            updates = []
+            params = []
+            if user_name is not None:
+                updates.append("user_name = ?")
+                params.append(normalized_name)
+            if status is not None:
+                updates.append("status = ?")
+                params.append(status)
+            updates.append("updated_at = ?")
+            params.append(now)
+            params.append(user_id)
+            conn.execute(
+                f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?",
+                params,
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO users (user_id, user_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, normalized_name, status or "pending", now, now),
+            )
         conn.commit()
 
 
@@ -284,6 +358,41 @@ def get_latest_video_record(db_path: str, user_id: str) -> Optional[dict]:
             return None
         cols = [d[0] for d in cur.description]
         return dict(zip(cols, row))
+
+
+def list_users(db_path: str) -> list[dict]:
+    with closing(_connect(db_path)) as conn:
+        cur = conn.execute(
+            """
+            SELECT user_id, user_name, status, created_at, updated_at
+            FROM users
+            ORDER BY
+                CASE
+                    WHEN updated_at IS NULL OR TRIM(updated_at) = '' THEN 1
+                    ELSE 0
+                END,
+                updated_at DESC,
+                created_at DESC,
+                user_id ASC
+            """
+        )
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+
+    users: list[dict] = []
+    for row in rows:
+        user = dict(zip(cols, row))
+        latest_video = get_latest_video_record(db_path, user["user_id"])
+        effective_status = (latest_video or {}).get("status") or user.get("status") or "pending"
+        users.append(
+            {
+                "id": user["user_id"],
+                "name": user.get("user_name") or user["user_id"],
+                "status": effective_status,
+                "updated_at": (latest_video or {}).get("updated_at") or user.get("updated_at"),
+            }
+        )
+    return users
 
 
 def count_subevents(extracted_context_path: str) -> Optional[int]:
