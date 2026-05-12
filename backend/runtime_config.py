@@ -158,6 +158,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 ENV_ONLY_OVERRIDES = {
+    "server.api_base_url": "PUBLIC_BASE_URL",
     "models.siliconflow.api_key": "SILICONFLOW_API_KEY",
     "models.bailian.api_key": "BAILIAN_API_KEY",
     "models.volcengine.access_key": "VOLC_ACCESS_KEY",

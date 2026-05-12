@@ -1,0 +1,29 @@
+services:
+  lifelog-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lifelog-backend
+    working_dir: /app/backend
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      RUNTIME_CONFIG_PATH: /app/backend/runtime_config.docker.json
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/lifelog.db:/app/backend/lifelog.db
+      - ./backend/output:/app/backend/output
+      - ./backend/videos:/app/backend/videos
+      - ./backend/upload_chunks:/app/backend/upload_chunks
+      - ./backend/.cache:/app/backend/.cache
+    restart: unless-stopped
+  lifelog-frontend:
+    build:
+      context: .
+      dockerfile: frontend/LifelogWeb/Dockerfile
+    container_name: lifelog-frontend
+    depends_on:
+      - lifelog-backend
+    ports:
+      - "80:80"
+    restart: unless-stopped

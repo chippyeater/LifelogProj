@@ -15,6 +15,7 @@ from flask import Flask, Response, jsonify, send_from_directory, request, abort
 import mimetypes
 from generate_unity_json import generate_game_meta_flow, validate_generated_assets
 from db import (
+    delete_user_task,
     get_pipeline_state,
     get_video_record,
     get_latest_video_record,
@@ -37,6 +38,19 @@ app = Flask(__name__)
 logger = logging.getLogger(__name__)
 TASK_STATUS_FILENAME = "status.json"
 RECALL_REPORT_FILENAME = "recall_report.json"
+_DELETE_STATUS_MAP = {
+    "idle": "pending",
+    "not_started": "pending",
+    "uploading": "processing",
+    "processing": "processing",
+    "completed": "all_ready",
+    "all_ready": "all_ready",
+    "error": "failed",
+    "failed": "failed",
+    "context_extracted": "context_extracted",
+    "video_uploaded": "video_uploaded",
+    "queued": "queued",
+}
 
 
 @app.before_request
@@ -78,6 +92,32 @@ def _resolve_status_path(user_id: str) -> str:
 
 def _resolve_recall_report_path(user_id: str) -> str:
     return os.path.join(_resolve_output_dir(user_id), RECALL_REPORT_FILENAME)
+
+
+def _normalize_delete_status(raw_status: str) -> str:
+    return _DELETE_STATUS_MAP.get((raw_status or "").strip().lower(), (raw_status or "").strip().lower())
+
+
+def _remove_file_if_within(root_dir: str, target_path: str) -> None:
+    if not target_path:
+        return
+    root_abs = os.path.abspath(root_dir)
+    target_abs = os.path.abspath(target_path)
+    if os.path.commonpath([root_abs, target_abs]) != root_abs:
+        raise ValueError(f"refusing to delete path outside root: {target_path}")
+    if os.path.isfile(target_abs):
+        os.remove(target_abs)
+
+
+def _remove_tree_if_within(root_dir: str, target_path: str) -> None:
+    if not target_path:
+        return
+    root_abs = os.path.abspath(root_dir)
+    target_abs = os.path.abspath(target_path)
+    if os.path.commonpath([root_abs, target_abs]) != root_abs:
+        raise ValueError(f"refusing to delete path outside root: {target_path}")
+    if os.path.isdir(target_abs):
+        shutil.rmtree(target_abs, ignore_errors=False)
 
 
 def _utc_now_iso() -> str:
@@ -829,6 +869,72 @@ def get_job_status():
 
     resolved_video_name = rec.get("video_name") or video_name
     return jsonify(_build_job_status_payload(base_url, user_id, resolved_video_name, rec))
+
+
+@app.delete("/api/delete-task")
+def delete_task():
+    user_id = (request.args.get("user") or "").strip()
+    requested_video = os.path.basename((request.args.get("video") or "").strip())
+    confirm = (request.args.get("confirm") or "").strip().lower()
+    requested_status = _normalize_delete_status(request.args.get("status") or "")
+
+    if not user_id:
+        return _json_response({"ok": False, "error": "user is required"}, 400)
+    if confirm not in {"true", "1", "yes"}:
+        return _json_response({"ok": False, "error": "confirm=true is required"}, 400)
+    if not requested_status:
+        return _json_response({"ok": False, "error": "status is required"}, 400)
+
+    init_db(DB_PATH)
+    rec = get_video_record(DB_PATH, user_id, requested_video) if requested_video else get_latest_video_record(DB_PATH, user_id)
+    status_doc = _read_status_json(user_id)
+
+    if not rec and not status_doc:
+        return _json_response({"ok": False, "error": "task not found"}, 404)
+
+    current_status = ""
+    if rec:
+        current_status = _normalize_delete_status(rec.get("status") or "")
+    if not current_status and status_doc:
+        current_status = _normalize_delete_status(status_doc.get("status") or "")
+
+    if current_status and requested_status != current_status:
+        return _json_response(
+            {
+                "ok": False,
+                "error": "status mismatch",
+                "expected_status": current_status,
+                "requested_status": requested_status,
+            },
+            409,
+        )
+
+    resolved_video = requested_video or ((rec or {}).get("video_name") or "")
+    if rec and requested_video and requested_video != (rec.get("video_name") or ""):
+        return _json_response({"ok": False, "error": "task not found"}, 404)
+
+    video_path = ""
+    if rec and rec.get("video_path"):
+        video_path = resolve_backend_path(str(rec.get("video_path")))
+    elif resolved_video:
+        video_path = os.path.join(VIDEOS_DIR, resolved_video)
+
+    if video_path:
+        _remove_file_if_within(VIDEOS_DIR, video_path)
+    _remove_tree_if_within(OUTPUT_ROOT, _resolve_output_dir(user_id))
+
+    deleted_rows = delete_user_task(DB_PATH, user_id, resolved_video or None)
+    if deleted_rows <= 0 and rec:
+        return _json_response({"ok": False, "error": "task delete failed"}, 500)
+
+    return _json_response(
+        {
+            "ok": True,
+            "user": user_id,
+            "video": resolved_video,
+            "deleted_rows": deleted_rows,
+        }
+    )
 
 
 @app.post("/api/recall-report")

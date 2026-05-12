@@ -1,0 +1,601 @@
+{
+  "backend_path": "backend/",
+  "database_types": [
+    {
+      "type": "SQLite",
+      "engine": "sqlite3",
+      "connection": {
+        "entrypoints": [
+          "backend/db.py::_connect",
+          "backend/api_server.py::DB_PATH",
+          "backend/run_pipeline.py::main"
+        ],
+        "database_path_config": "server.database_path",
+        "default_database_path": "lifelog.db",
+        "connection_code": "sqlite3.connect(db_path)"
+      }
+    },
+    {
+      "type": "JSON file store",
+      "note": "Used as auxiliary persistence for job status and recall report, not relational tables",
+      "stores": [
+        {
+          "name": "status.json",
+          "path_pattern": "backend/output/<user_id>/status.json",
+          "read_by": [
+            "backend/api_server.py::_read_status_json",
+            "backend/api_server.py::_build_job_status_payload",
+            "backend/api_server.py::_build_job_status_from_status_doc",
+            "backend/api_server.py::_build_user_list_item",
+            "backend/api_server.py::get_job_status",
+            "backend/run_pipeline.py::_read_status_doc"
+          ],
+          "write_by": [
+            "backend/api_server.py::_write_status_json",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::_write_status_doc",
+            "backend/run_pipeline.py::_update_status_doc",
+            "backend/run_pipeline.py::update_status"
+          ]
+        },
+        {
+          "name": "recall_report.json",
+          "path_pattern": "backend/output/<user_id>/recall_report.json",
+          "read_by": [
+            "backend/api_server.py::get_recall_report"
+          ],
+          "write_by": [
+            "backend/api_server.py::post_recall_report"
+          ]
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "name": "users",
+      "type": "table",
+      "defined_in": "backend/db.py::init_db",
+      "primary_key": [
+        "user_id"
+      ],
+      "indexes": [],
+      "initialization": {
+        "create_table": "CREATE TABLE IF NOT EXISTS users (...)",
+        "default_seed_logic": [
+          "backend/db.py::init_db inserts missing users from user_videos",
+          "seed status defaults to 'pending' via COALESCE(NULLIF(TRIM(status), ''), 'pending')"
+        ],
+        "migration_logic": []
+      },
+      "read_by": [
+        "backend/db.py::upsert_user (existence check: SELECT 1 FROM users WHERE user_id = ?)",
+        "backend/db.py::list_users",
+        "backend/api_server.py::get_users"
+      ],
+      "write_by": [
+        "backend/db.py::init_db",
+        "backend/db.py::upsert_user"
+      ],
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::upsert_user",
+            "backend/db.py::list_users",
+            "backend/db.py::init_db (seed from user_videos)",
+            "backend/api_server.py::get_users"
+          ],
+          "write_by": [
+            "backend/db.py::init_db",
+            "backend/db.py::upsert_user"
+          ],
+          "default": null
+        },
+        {
+          "name": "user_name",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::list_users",
+            "backend/api_server.py::_build_user_list_item"
+          ],
+          "write_by": [
+            "backend/db.py::init_db (seed uses user_id as user_name)",
+            "backend/db.py::upsert_user"
+          ],
+          "default": "user_id fallback in upsert_user/init_db seed"
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::list_users",
+            "backend/db.py::init_db (seed reads status from user_videos)",
+            "backend/api_server.py::_build_user_list_item"
+          ],
+          "write_by": [
+            "backend/db.py::init_db",
+            "backend/db.py::upsert_user"
+          ],
+          "default": "'pending' when inserted without explicit status"
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::list_users"
+          ],
+          "write_by": [
+            "backend/db.py::init_db",
+            "backend/db.py::upsert_user"
+          ],
+          "default": "current UTC ISO timestamp at insert"
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::list_users",
+            "backend/api_server.py::_build_user_list_item"
+          ],
+          "write_by": [
+            "backend/db.py::init_db",
+            "backend/db.py::upsert_user"
+          ],
+          "default": "current UTC ISO timestamp at insert/update"
+        }
+      ]
+    },
+    {
+      "name": "user_pipeline",
+      "type": "table",
+      "defined_in": "backend/db.py::init_db",
+      "primary_key": [
+        "user_id"
+      ],
+      "indexes": [],
+      "initialization": {
+        "create_table": "CREATE TABLE IF NOT EXISTS user_pipeline (...)",
+        "default_seed_logic": [],
+        "migration_logic": []
+      },
+      "read_by": [],
+      "write_by": [
+        "backend/db.py::init_db"
+      ],
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "video_path",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "index_id",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "video_id",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "extracted_context_path",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "gameflow_path",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "gamemeta_path",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "subevent_count",
+          "type": "INTEGER",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "processed_at",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [],
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "user_videos",
+      "type": "table",
+      "defined_in": "backend/db.py::init_db",
+      "primary_key": [
+        "user_id",
+        "video_name"
+      ],
+      "indexes": [
+        {
+          "name": "idx_user_videos_video_path",
+          "columns": [
+            "video_path"
+          ],
+          "defined_in": "backend/db.py::init_db"
+        }
+      ],
+      "initialization": {
+        "create_table": "CREATE TABLE IF NOT EXISTS user_videos (...)",
+        "default_seed_logic": [],
+        "migration_logic": [
+          "backend/db.py::init_db migrates legacy user_videos schema lacking video_name into user_videos_new",
+          "backend/db.py::init_db adds pipeline_state column via ALTER TABLE if missing"
+        ]
+      },
+      "read_by": [
+        "backend/db.py::get_pipeline_state",
+        "backend/db.py::upsert_user_video (existence check)",
+        "backend/db.py::get_video_record",
+        "backend/db.py::get_latest_video_record",
+        "backend/db.py::list_users (via get_latest_video_record)",
+        "backend/api_server.py::_build_job_status_payload",
+        "backend/api_server.py::_build_user_list_item",
+        "backend/api_server.py::get_job_status",
+        "backend/run_pipeline.py::_merge_pipeline_state",
+        "backend/run_pipeline.py::main"
+      ],
+      "write_by": [
+        "backend/db.py::init_db",
+        "backend/db.py::set_pipeline_state",
+        "backend/db.py::upsert_user_video",
+        "backend/api_server.py::create_process_task",
+        "backend/run_pipeline.py::_mark_pipeline_failure",
+        "backend/run_pipeline.py::main"
+      ],
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::get_video_record",
+            "backend/db.py::get_latest_video_record",
+            "backend/db.py::init_db (seed users from user_videos)",
+            "backend/api_server.py::get_job_status",
+            "backend/run_pipeline.py::main"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "video_name",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::get_video_record",
+            "backend/api_server.py::get_job_status",
+            "backend/api_server.py::_build_user_list_item",
+            "backend/run_pipeline.py::_merge_pipeline_state",
+            "backend/run_pipeline.py::main"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration derives from video_path or video_id)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": "derived during migration when legacy schema lacks video_name"
+        },
+        {
+          "name": "video_path",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::init_db (legacy migration derives video_name from video_path)"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": "normalized path via _normalize_video_path before upsert"
+        },
+        {
+          "name": "video_id",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::init_db (legacy migration fallback for video_name)"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)"
+          ],
+          "default": null
+        },
+        {
+          "name": "video_url",
+          "type": "TEXT",
+          "read_by": [
+            "backend/api_server.py::_build_job_status_payload",
+            "backend/run_pipeline.py::main"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "video_object_key",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)"
+          ],
+          "default": null
+        },
+        {
+          "name": "index_id",
+          "type": "TEXT",
+          "read_by": [],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)"
+          ],
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::init_db (seed users from user_videos)",
+            "backend/db.py::get_latest_video_record",
+            "backend/db.py::list_users",
+            "backend/api_server.py::_build_job_status_payload",
+            "backend/api_server.py::_build_user_list_item"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::_mark_pipeline_failure",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "extracted_context_path",
+          "type": "TEXT",
+          "read_by": [
+            "backend/api_server.py::_build_job_status_payload"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "gameflow_path",
+          "type": "TEXT",
+          "read_by": [
+            "backend/api_server.py::_build_asset_validation",
+            "backend/api_server.py::_build_job_status_payload"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "gamemeta_path",
+          "type": "TEXT",
+          "read_by": [
+            "backend/api_server.py::_build_asset_validation",
+            "backend/api_server.py::_build_job_status_payload"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "subevent_count",
+          "type": "INTEGER",
+          "read_by": [
+            "backend/api_server.py::_build_job_status_payload"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "processed_at",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::get_latest_video_record",
+            "backend/api_server.py::_build_job_status_payload"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)",
+            "backend/run_pipeline.py::main"
+          ],
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::get_latest_video_record"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)"
+          ],
+          "default": "current UTC ISO timestamp at insert"
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::get_latest_video_record",
+            "backend/db.py::list_users",
+            "backend/api_server.py::_build_job_status_payload",
+            "backend/api_server.py::_build_user_list_item"
+          ],
+          "write_by": [
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (legacy migration copy)"
+          ],
+          "default": "current UTC ISO timestamp at insert/update"
+        },
+        {
+          "name": "pipeline_state",
+          "type": "TEXT",
+          "read_by": [
+            "backend/db.py::get_pipeline_state",
+            "backend/api_server.py::_build_job_status_payload",
+            "backend/api_server.py::_build_user_list_item",
+            "backend/run_pipeline.py::_merge_pipeline_state"
+          ],
+          "write_by": [
+            "backend/db.py::set_pipeline_state",
+            "backend/db.py::upsert_user_video",
+            "backend/db.py::init_db (ALTER TABLE adds column if missing)",
+            "backend/api_server.py::create_process_task",
+            "backend/run_pipeline.py::_merge_pipeline_state",
+            "backend/run_pipeline.py::_mark_pipeline_failure"
+          ],
+          "default": {
+            "events": "pending",
+            "entities": "pending",
+            "frames": "pending",
+            "aigc": "pending",
+            "unity": "pending",
+            "last_error": null
+          }
+        }
+      ]
+    }
+  ],
+  "functions_and_apis_touching_db": [
+    {
+      "name": "backend/api_server.py::create_process_task",
+      "api": "POST /api/tasks/process",
+      "db_reads": [],
+      "db_writes": [
+        "init_db",
+        "upsert_user(users)",
+        "upsert_user_video(user_videos)",
+        "set_pipeline_state(user_videos.pipeline_state)"
+      ]
+    },
+    {
+      "name": "backend/api_server.py::get_users",
+      "api": "GET /api/users",
+      "db_reads": [
+        "list_users(users)",
+        "get_latest_video_record(user_videos)",
+        "get_pipeline_state(user_videos.pipeline_state)"
+      ],
+      "db_writes": [
+        "init_db"
+      ]
+    },
+    {
+      "name": "backend/api_server.py::get_job_status",
+      "api": "GET /api/job-status",
+      "db_reads": [
+        "get_video_record(user_videos) or get_latest_video_record(user_videos)",
+        "get_pipeline_state(user_videos.pipeline_state)"
+      ],
+      "db_writes": []
+    },
+    {
+      "name": "backend/run_pipeline.py::main",
+      "api": null,
+      "db_reads": [
+        "get_video_record(user_videos)",
+        "get_pipeline_state(user_videos.pipeline_state)"
+      ],
+      "db_writes": [
+        "init_db",
+        "upsert_user_video(user_videos)",
+        "set_pipeline_state(user_videos.pipeline_state)",
+        "status='video_uploaded'/'context_extracted'/'all_ready'",
+        "processed_at",
+        "subevent_count"
+      ]
+    }
+  ],
+  "notes": [
+    "No MySQL/PostgreSQL/MongoDB client usage was found under backend/.",
+    "The only actual relational database access layer is backend/db.py.",
+    "user_pipeline is created but not referenced elsewhere in backend/; it appears unused.",
+    "pipeline_state is not normalized into a separate table; it is stored as JSON text in user_videos.pipeline_state.",
+    "Auxiliary JSON files exist, but they are file-based state, not SQL tables."
+  ]
+}

@@ -395,6 +395,31 @@ def list_users(db_path: str) -> list[dict]:
     return users
 
 
+def delete_user_task(db_path: str, user_id: str, video_name: Optional[str] = None) -> int:
+    if not user_id:
+        return 0
+    with closing(_connect(db_path)) as conn:
+        if video_name:
+            cur = conn.execute(
+                "DELETE FROM user_videos WHERE user_id = ? AND video_name = ?",
+                (user_id, video_name),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM user_videos WHERE user_id = ?",
+                (user_id,),
+            )
+        deleted_rows = int(cur.rowcount or 0)
+        remaining = conn.execute(
+            "SELECT 1 FROM user_videos WHERE user_id = ? LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if remaining is None:
+            conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        conn.commit()
+    return deleted_rows
+
+
 def count_subevents(extracted_context_path: str) -> Optional[int]:
     try:
         import json

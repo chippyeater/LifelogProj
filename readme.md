@@ -60,6 +60,28 @@ pip install -r requirements.txt
 pip install edge-tts
 ```
 
+## Docker 单入口部署
+
+对 Unity 的局域网访问，不需要域名。推荐只暴露一个入口端口，由 `nginx` 提供前端并反向代理 `/api` 与 `/assets` 到后端。
+
+启动前，在项目根目录设置对外访问地址：
+
+```bash
+# Windows PowerShell
+$env:PUBLIC_BASE_URL="http://192.168.1.23"
+docker compose up -d --build
+```
+
+其中 `192.168.1.23` 替换成运行 Docker 那台电脑的局域网 IP。
+
+这样：
+
+- 浏览器访问前端：`http://192.168.1.23/`
+- Unity 访问接口：`http://192.168.1.23/api/...`
+- Unity 访问资源：`http://192.168.1.23/assets/...`
+
+后端会使用 `PUBLIC_BASE_URL` 生成返回给 Unity 的 `game_meta_url`、`game_flow_url` 和资源 URL，避免返回 `localhost` 或容器内部地址。
+
 ## 环境变量
 
 项目通过 `.env` 或系统环境变量读取配置。常用变量如下。

@@ -1,0 +1,18 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "database_path": "lifelog.db"
+  },
+  "paths": {
+    "output_root": "output",
+    "videos_dir": "videos",
+    "upload_chunks_dir": "upload_chunks",
+    "huggingface_root": ".cache/huggingface",
+    "material_library_root": "output"
+  },
+  "binaries": {
+    "ffmpeg_bin": "ffmpeg",
+    "ffprobe_bin": "ffprobe"
+  }
+}
