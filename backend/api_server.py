@@ -1001,6 +1001,16 @@ def tts():
     out_path = os.path.join(cache_dir, filename)
 
     cached = os.path.exists(out_path)
+    if cached:
+        ok, err = _validate_tts_file(out_path)
+        if not ok:
+            try:
+                os.remove(out_path)
+                logger.warning("invalid cached tts removed: %s, reason=%s", out_path, err)
+            except OSError as exc:
+                logger.warning("failed to remove invalid cached tts: %s, error=%s", out_path, exc)
+            cached = False
+
     tts_ms = 0
     if not cached:
         try:
