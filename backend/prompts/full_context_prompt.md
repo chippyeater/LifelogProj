@@ -4,8 +4,8 @@
 # 任务（Task）：
 - 分析输入视频，提取：
   1. 整体活动级线索（activity_visual_clue, activity_audio_clue）
-  2. 子事件（events），按时间顺序列出视频中所有活动主题相关子事件
-  3. 每个事件的关键实体（entities）
+  2. 子事件（events），按时间顺序列出视频中**所有**活动主题相关子事件
+  3. 每个事件的**所有**关键实体（entities）
   4. 每个实体的细节回忆问题（detail_pair）
 
 ## 输出要求：
@@ -32,7 +32,7 @@
   - name：4–7 个字
   - description：一句完整自然语言描述（行为 + 对象 + 结果）
   - start_time / end_time
-  - scene_clues：1~2 个关键帧，每个包含 frame 与 description
+  - scene_clues：1 个关键帧，每个包含 frame 与 description
   - video_clip：短片 5–10 秒，包含 start_time, end_time, reason
   - entities：1–3 个关键实体
 
@@ -50,7 +50,7 @@
     - options：正确答案 + 1 个干扰项
 - 生成规则：
   - 谨慎数量题，确保视频中完整片段可验证
-  - 优先单帧可见的稳定细节（颜色、外形、包装形式、位置关系）
+  - 优先单帧可见的明显且稳定的细节（颜色、外形、包装形式）
   - 不生成模糊或无法确认的品牌、文字、型号、口味信息
 
 # Constraints

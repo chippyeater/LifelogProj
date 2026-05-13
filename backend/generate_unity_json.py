@@ -4,6 +4,7 @@ import re
 import json
 import hashlib
 import logging
+import shutil
 from typing import List, Dict, Any, Tuple, Optional
 
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -88,6 +89,23 @@ def _build_safe_media_filename(prefix: str, raw_text: str, ext: str, max_len: in
     digest = hashlib.sha1(str(raw_text).encode("utf-8")).hexdigest()[:8]
     clean_ext = ext.lstrip(".")
     return f"{safe_prefix}_{safe_text}_{digest}.{clean_ext}"
+
+
+def _copy_confusion_image_to_enhanced(
+    *,
+    source_path: str,
+    event_name: str,
+    output_dir: Optional[str],
+) -> str:
+    if not output_dir:
+        return source_path.replace("\\", "/")
+    enhanced_dir = os.path.join(output_dir, "enhanced")
+    os.makedirs(enhanced_dir, exist_ok=True)
+    ext = os.path.splitext(source_path)[1].lower() or ".jpg"
+    dest_name = _build_safe_media_filename("confusion", event_name or "event", ext.lstrip("."))
+    dest_path = os.path.join(enhanced_dir, dest_name)
+    shutil.copy2(source_path, dest_path)
+    return f"enhanced/{dest_name}"
 
 
 _ASSET_PATH_PREFIXES = ("frames/", "enhanced/", "option_images/", "media/", "assets/")
@@ -248,14 +266,16 @@ def _select_confusion_events(user_events: List[str], confusion_count: int, mater
         return []
     
     material_events = []
+    supported_exts = {".jpg", ".jpeg", ".png"}
     for file in os.listdir(material_dir):
-        if file.endswith('.jpg'):
-            event_name = os.path.splitext(file)[0]  # 去掉 .jpg
+        ext = os.path.splitext(file)[1].lower()
+        if ext in supported_exts:
+            event_name = os.path.splitext(file)[0]
             image_path = os.path.join(material_dir, file)
             material_events.append({"event_name": event_name, "image_path": image_path})
     
     if not material_events:
-        logger.warning(f"No .jpg files found in {material_dir}")
+        logger.warning(f"No supported image files found in {material_dir}")
         return []
     
     # 过滤掉与用户事件相同的
@@ -1069,6 +1089,11 @@ def generate_game_meta_flow(
     import random
     for conf in confusion_events:
         insert_pos = random.randint(0, len(recall_tasks))
+        copied_image_path = _copy_confusion_image_to_enhanced(
+            source_path=conf["image_path"],
+            event_name=conf["event_name"],
+            output_dir=output_dir,
+        )
         conf_task = {
             "stage_id": "",
             "stage_name": conf["event_name"],
@@ -1076,8 +1101,8 @@ def generate_game_meta_flow(
             "stage_index": 0,
             "task_type": "recall",
             "task_description": f"回忆是否有'{conf['event_name']}'这个环节",
-            "enhanced_image_path": conf["image_path"],
-            "reference_frame_path": conf["image_path"],
+            "enhanced_image_path": copied_image_path,
+            "reference_frame_path": copied_image_path,
             "correct_answer": False,
         }
         recall_tasks.insert(insert_pos, conf_task)

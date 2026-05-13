@@ -51,6 +51,19 @@ _DELETE_STATUS_MAP = {
     "video_uploaded": "video_uploaded",
     "queued": "queued",
 }
+_DELETE_STATUS_BUCKETS = {
+    "pending": "idle",
+    "idle": "idle",
+    "not_started": "idle",
+    "queued": "processing",
+    "video_uploaded": "processing",
+    "processing": "processing",
+    "context_extracted": "processing",
+    "all_ready": "completed",
+    "completed": "completed",
+    "failed": "error",
+    "error": "error",
+}
 
 
 @app.before_request
@@ -96,6 +109,11 @@ def _resolve_recall_report_path(user_id: str) -> str:
 
 def _normalize_delete_status(raw_status: str) -> str:
     return _DELETE_STATUS_MAP.get((raw_status or "").strip().lower(), (raw_status or "").strip().lower())
+
+
+def _delete_status_bucket(raw_status: str) -> str:
+    normalized = _normalize_delete_status(raw_status)
+    return _DELETE_STATUS_BUCKETS.get(normalized, normalized)
 
 
 def _remove_file_if_within(root_dir: str, target_path: str) -> None:
@@ -335,6 +353,7 @@ def _launch_pipeline_process(
     people: str,
     activity_time: str,
     location: str,
+    force_regenerate_images: bool = False,
 ) -> None:
     logger.info("Launching pipeline process for user=%s video=%s", user_id, video_name)
     cmd = [
@@ -356,6 +375,8 @@ def _launch_pipeline_process(
         "--location",
         location,
     ]
+    if force_regenerate_images:
+        cmd.append("--force-regenerate-images")
     subprocess.Popen(
         cmd,
         cwd=APP_DIR,
@@ -427,10 +448,12 @@ def _ensure_generated(base_url: str, user_id: str, force: bool = False) -> Tuple
     # 确保 GameMeta/GameFlow 已生成，必要时重新生成并返回结果
     extracted_path, game_meta_path, game_flow_path = _resolve_paths(user_id)
     output_dir = _resolve_output_dir(user_id)
+    confusion_count = int(get_config_value("pipeline.confusion_count", 2))
     if force or _should_regenerate(extracted_path, game_meta_path, game_flow_path):
         return generate_game_meta_flow(
             input_path=extracted_path,
             output_dir=output_dir,
+            confusion_count=confusion_count,
             base_url=base_url,
             user_id=user_id,
         )
@@ -447,6 +470,7 @@ def _ensure_generated(base_url: str, user_id: str, force: bool = False) -> Tuple
     return generate_game_meta_flow(
         input_path=extracted_path,
         output_dir=output_dir,
+        confusion_count=confusion_count,
         base_url=base_url,
         user_id=user_id,
         regenerate_assets=True,
@@ -788,6 +812,96 @@ def create_process_task():
     )
 
 
+@app.post("/api/tasks/regenerate-images")
+def regenerate_images_task():
+    payload = request.get_json(silent=True) or {}
+    user_id = (payload.get("user") or request.args.get("user") or "default").strip() or "default"
+    video_name = os.path.basename((payload.get("video") or request.args.get("video") or "").strip())
+
+    init_db(DB_PATH)
+    rec = get_video_record(DB_PATH, user_id, video_name) if video_name else get_latest_video_record(DB_PATH, user_id)
+    if not rec:
+        return _json_response({"ok": False, "error": "task not found"}, 404)
+
+    resolved_video_name = (rec.get("video_name") or video_name or "").strip()
+    if not resolved_video_name:
+        return _json_response({"ok": False, "error": "video not found"}, 404)
+
+    extracted_path = (rec.get("extracted_context_path") or _resolve_paths(user_id)[0] or "").strip()
+    if not extracted_path or not os.path.exists(extracted_path):
+        return _json_response({"ok": False, "error": "extracted_context.json not found"}, 404)
+
+    try:
+        with open(extracted_path, "r", encoding="utf-8") as f:
+            context_data = json.load(f)
+    except Exception as exc:
+        return _json_response({"ok": False, "error": f"failed to load extracted_context.json: {exc}"}, 500)
+
+    activity = (context_data.get("activity") or str(get_config_value("pipeline.default_activity", "shopping"))).strip()
+    people = (context_data.get("people") or str(get_config_value("pipeline.default_people", "me"))).strip()
+    activity_time = (context_data.get("time") or str(get_config_value("pipeline.default_time", "2024-01-05 15:00"))).strip()
+    location = (context_data.get("location") or str(get_config_value("pipeline.default_location", "supermarket"))).strip()
+
+    status_doc = _read_status_json(user_id)
+    task_id = status_doc.get("task_id") or f"task_{_safe_name_component(user_id, 'user')}"
+    job_id = status_doc.get("job_id") or task_id
+    pipeline_state = get_pipeline_state(DB_PATH, user_id, resolved_video_name)
+    pipeline_state.update(
+        {
+            "frames": "pending",
+            "aigc": "pending",
+            "unity": "pending",
+            "last_error": None,
+        }
+    )
+    set_pipeline_state(DB_PATH, user_id, resolved_video_name, pipeline_state)
+    upsert_user(DB_PATH, user_id, status="processing")
+    upsert_user_video(
+        DB_PATH,
+        user_id=user_id,
+        video_name=resolved_video_name,
+        fields={"status": "processing"},
+    )
+    _write_status_json(
+        user_id,
+        _status_json_payload(
+            user_id=user_id,
+            task_id=task_id,
+            job_id=job_id,
+            video_name=resolved_video_name,
+            status="processing",
+            ready=False,
+            progress=45,
+            current_step="开始重新生成增强图片",
+            pipeline_state=pipeline_state,
+            error=None,
+        ),
+    )
+
+    _launch_pipeline_process(
+        user_id=user_id,
+        video_name=resolved_video_name,
+        activity=activity,
+        people=people,
+        activity_time=activity_time,
+        location=location,
+        force_regenerate_images=True,
+    )
+
+    return _json_response(
+        {
+            "ok": True,
+            "user": user_id,
+            "video": resolved_video_name,
+            "status": "processing",
+            "task_id": task_id,
+            "job_id": job_id,
+            "current_step": "开始重新生成增强图片",
+        },
+        202,
+    )
+
+
 @app.get("/api/health")
 def health():
     # 健康检查接口
@@ -877,6 +991,7 @@ def delete_task():
     requested_video = os.path.basename((request.args.get("video") or "").strip())
     confirm = (request.args.get("confirm") or "").strip().lower()
     requested_status = _normalize_delete_status(request.args.get("status") or "")
+    requested_bucket = _delete_status_bucket(requested_status)
 
     if not user_id:
         return _json_response({"ok": False, "error": "user is required"}, 400)
@@ -897,14 +1012,17 @@ def delete_task():
         current_status = _normalize_delete_status(rec.get("status") or "")
     if not current_status and status_doc:
         current_status = _normalize_delete_status(status_doc.get("status") or "")
+    current_bucket = _delete_status_bucket(current_status)
 
-    if current_status and requested_status != current_status:
+    if current_bucket and requested_bucket != current_bucket:
         return _json_response(
             {
                 "ok": False,
                 "error": "status mismatch",
                 "expected_status": current_status,
+                "expected_status_bucket": current_bucket,
                 "requested_status": requested_status,
+                "requested_status_bucket": requested_bucket,
             },
             409,
         )
@@ -919,9 +1037,18 @@ def delete_task():
     elif resolved_video:
         video_path = os.path.join(VIDEOS_DIR, resolved_video)
 
+    cleanup_warnings: list[str] = []
     if video_path:
-        _remove_file_if_within(VIDEOS_DIR, video_path)
-    _remove_tree_if_within(OUTPUT_ROOT, _resolve_output_dir(user_id))
+        try:
+            _remove_file_if_within(VIDEOS_DIR, video_path)
+        except Exception as exc:
+            logger.warning("delete-task video cleanup failed user=%s video=%s err=%s", user_id, resolved_video, exc)
+            cleanup_warnings.append(f"video_cleanup_failed: {exc}")
+    try:
+        _remove_tree_if_within(OUTPUT_ROOT, _resolve_output_dir(user_id))
+    except Exception as exc:
+        logger.warning("delete-task output cleanup failed user=%s err=%s", user_id, exc)
+        cleanup_warnings.append(f"output_cleanup_failed: {exc}")
 
     deleted_rows = delete_user_task(DB_PATH, user_id, resolved_video or None)
     if deleted_rows <= 0 and rec:
@@ -933,6 +1060,7 @@ def delete_task():
             "user": user_id,
             "video": resolved_video,
             "deleted_rows": deleted_rows,
+            "cleanup_warnings": cleanup_warnings,
         }
     )
 
