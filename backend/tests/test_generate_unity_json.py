@@ -25,6 +25,7 @@ generate_unity_json = import_with_stubs(
             "VolcEngineAIGCGenerator": object,
         },
         "llm_client": {
+            "BailianLLM": object,
             "SiliconFlowLLM": object,
         },
     },
@@ -73,7 +74,7 @@ class GenerateUnityJsonTest(unittest.TestCase):
              patch.object(generate_unity_json, "_export_activity_audio_asset", return_value="media/audio/activity_theme_audio.mp3"), \
              patch.object(generate_unity_json, "_export_event_video_asset", side_effect=lambda **kwargs: f"media/video/{kwargs['event_id']}.mp4"), \
              patch.object(generate_unity_json, "_generate_distractor_option_with_llm", return_value=["apple", "bread", "drink"]), \
-             patch.object(generate_unity_json, "_generate_distractor_event_with_llm", return_value="distractor event"):
+             patch.object(generate_unity_json, "_generate_distractor_events_with_llm", return_value={"event1": "distractor event"}):
             game_meta, game_flow = generate_unity_json.generate_game_meta_flow(
                 input_path=str(input_copy),
                 output_dir=str(temp_output),
@@ -256,7 +257,7 @@ class GenerateUnityJsonTest(unittest.TestCase):
              patch.object(generate_unity_json, "_export_activity_audio_asset", return_value="media/audio/activity_theme_audio.mp3"), \
              patch.object(generate_unity_json, "_export_event_video_asset", side_effect=lambda **kwargs: f"media/video/{kwargs['event_id']}.mp4"), \
              patch.object(generate_unity_json, "_generate_distractor_option_with_llm", return_value=["apple", "bread", "drink"]), \
-             patch.object(generate_unity_json, "_generate_distractor_event_with_llm", return_value="distractor event"):
+             patch.object(generate_unity_json, "_generate_distractor_events_with_llm", return_value={"event1": "distractor event"}):
             game_meta, game_flow = generate_unity_json.generate_game_meta_flow(
                 input_path=str(input_copy),
                 output_dir=str(temp_output),
@@ -309,7 +310,7 @@ class GenerateUnityJsonTest(unittest.TestCase):
              patch.object(generate_unity_json, "_export_activity_audio_asset", return_value="media/audio/activity_theme_audio.mp3"), \
              patch.object(generate_unity_json, "_export_event_video_asset", side_effect=lambda **kwargs: f"media/video/{kwargs['event_id']}.mp4"), \
              patch.object(generate_unity_json, "_generate_distractor_option_with_llm", return_value=["apple", "bread", "drink"]), \
-             patch.object(generate_unity_json, "_generate_distractor_event_with_llm", return_value="distractor event"), \
+             patch.object(generate_unity_json, "_generate_distractor_events_with_llm", return_value={"event1": "distractor event"}), \
              patch.object(generate_unity_json, "_select_confusion_events", return_value=[{"event_name": "fake event", "image_path": "default/fake.jpg"}]), \
              patch("random.randint", return_value=1):
             _, game_flow = generate_unity_json.generate_game_meta_flow(

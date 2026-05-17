@@ -116,6 +116,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "max_video_duration_seconds": None,
             "max_video_size_bytes": None,
         },
+        "unity_generation": {
+            "confusion_event_batch_model": "qwen3.6-plus",
+            "detail_distractor_batch_model": "qwen3.6-plus",
+        },
         "embedding": {
             "model_name": "moka-ai/m3e-base",
             "event_similarity_threshold": 0.9,
@@ -148,6 +152,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "stage1_video_parse": "prompts/stage1_video_parse_prompt.md",
         "stage2_event_rebuild": "prompts/stage2_event_rebuild_prompt.md",
         "stage3_detail_generate": "prompts/stage3_detail_generate_prompt.md",
+        "confusion_event_batch": "prompts/confusion_event_batch_prompt.md",
+        "detail_distractor_batch": "prompts/detail_distractor_batch_prompt.md",
         "strategy": "prompts/strategy_prompt.md",
         "strategy_components": "prompts/strategy_components.json",
     },

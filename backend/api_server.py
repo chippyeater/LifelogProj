@@ -353,6 +353,7 @@ def _launch_pipeline_process(
     people: str,
     activity_time: str,
     location: str,
+    confusion_count: Optional[int] = None,
     force_regenerate_images: bool = False,
 ) -> None:
     logger.info("Launching pipeline process for user=%s video=%s", user_id, video_name)
@@ -375,6 +376,8 @@ def _launch_pipeline_process(
         "--location",
         location,
     ]
+    if confusion_count is not None:
+        cmd.extend(["--confusion-count", str(confusion_count)])
     if force_regenerate_images:
         cmd.append("--force-regenerate-images")
     subprocess.Popen(
@@ -728,6 +731,13 @@ def create_process_task():
     activity_time = (request.form.get("time") or "2024年1月5日15:00").strip() or "2024年1月5日15:00"
     location = (request.form.get("location") or "超市").strip() or "超市"
     shopping_list_raw = (request.form.get("shopping_list") or "").strip()
+    confusion_count_raw = (request.form.get("confusion_event_count") or "").strip()
+    confusion_count: Optional[int] = None
+    if confusion_count_raw:
+        try:
+            confusion_count = _parse_positive_int(confusion_count_raw, "confusion_event_count", allow_zero=True)
+        except ValueError as exc:
+            return _json_response({"ok": False, "error": str(exc)}, 400)
 
     task_id = _make_task_id(user_id)
     job_id = task_id
@@ -793,6 +803,7 @@ def create_process_task():
         people=people,
         activity_time=activity_time,
         location=location,
+        confusion_count=confusion_count,
     )
 
     return _json_response(
@@ -817,6 +828,17 @@ def regenerate_images_task():
     payload = request.get_json(silent=True) or {}
     user_id = (payload.get("user") or request.args.get("user") or "default").strip() or "default"
     video_name = os.path.basename((payload.get("video") or request.args.get("video") or "").strip())
+    confusion_count_raw = str(
+        payload.get("confusion_event_count")
+        or request.args.get("confusion_event_count")
+        or ""
+    ).strip()
+    confusion_count: Optional[int] = None
+    if confusion_count_raw:
+        try:
+            confusion_count = _parse_positive_int(confusion_count_raw, "confusion_event_count", allow_zero=True)
+        except ValueError as exc:
+            return _json_response({"ok": False, "error": str(exc)}, 400)
 
     init_db(DB_PATH)
     rec = get_video_record(DB_PATH, user_id, video_name) if video_name else get_latest_video_record(DB_PATH, user_id)
@@ -885,6 +907,7 @@ def regenerate_images_task():
         people=people,
         activity_time=activity_time,
         location=location,
+        confusion_count=confusion_count,
         force_regenerate_images=True,
     )
 

@@ -26,13 +26,14 @@ from runtime_config import (
     apply_huggingface_cache_config,
     get_config_value,
     resolve_backend_path,
+    resolve_prompt_path,
 )
 
 apply_huggingface_cache_config()
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from llm_client import SiliconFlowLLM
+from llm_client import BailianLLM
 from clue_aigc_generator import VolcEngineAIGCGenerator
 from utils.media_export import (
     build_asset_relative_path,
@@ -389,6 +390,23 @@ def _extract_first_json_array(text: str) -> List[str]:
     return []
 
 
+def _extract_first_json_array_payload(text: str) -> List[Any]:
+    if not text:
+        return []
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    snippet = text[start : end + 1]
+    try:
+        data = json.loads(snippet)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
+
 def _looks_placeholder_option(s: str) -> bool:
     if not s:
         return True
@@ -400,25 +418,51 @@ def _looks_placeholder_option(s: str) -> bool:
     return False
 
 
-def _generate_distractor_option_with_llm(
-    event_name: str,
-    correct_items: List[str],
-    max_items: int = 5,
-) -> List[str]:
+def _generate_detail_distractor_options_with_llm(
+    activity: str,
+    events: List[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    if not events:
+        return {}
+    model_name = str(
+        get_config_value("models.unity_generation.detail_distractor_batch_model", "qwen3.6-plus")
+    ).strip() or "qwen3.6-plus"
     try:
-        llm = SiliconFlowLLM()
+        llm = BailianLLM(model=model_name)
     except Exception as e:
-        logger.warning("[LLM] SiliconFlow init failed: %s", e)
-        return []
-    prompt = (
-        "请为下面的事件生成用于回忆测试的干扰选项，输出 JSON 数组字符串。\n"
-        f"事件：{event_name}\n"
-        f"正确物体：{', '.join(correct_items)}\n"
-        f"要求：生成 {max_items} 个干扰物体名称；不得包含正确物体。\n"
-        f"重要限制：不要生成同义词、近义词、同一物体的另一种叫法\n"
-        "不要用没有实际意义的占位词、抽象概念或空泛类别词。"
-        "不要输出与正确答案有歧义的选项。\n"
-        "只返回 JSON 数组，如：[\"牛奶\", \"酸奶\"]。\n"
+        logger.warning("[LLM] Bailian init failed for detail distractors: %s", e)
+        return {}
+
+    try:
+        with open(resolve_prompt_path("detail_distractor_batch"), "r", encoding="utf-8") as f:
+            prompt_template = f.read()
+    except Exception as e:
+        logger.warning("[LLM] detail_distractor_batch prompt load failed: %s", e)
+        return {}
+
+    event_payload = []
+    for event in events:
+        event_name = str(event.get("event_name") or "").strip()
+        correct_items = _ensure_list_unique(
+            [str(item).strip() for item in (event.get("correct_items") or []) if str(item).strip()]
+        )
+        max_items = max(0, int(event.get("max_items") or 0))
+        if not event_name or not correct_items or max_items <= 0:
+            continue
+        event_payload.append(
+            {
+                "event_name": event_name,
+                "correct_items": correct_items,
+                "max_items": max_items,
+            }
+        )
+    if not event_payload:
+        return {}
+
+    prompt = prompt_template.replace("{{ACTIVITY_NAME}}", (activity or "").strip())
+    prompt = prompt.replace(
+        "{{EVENTS_JSON}}",
+        json.dumps(event_payload, ensure_ascii=False, indent=2),
     )
     try:
         raw = llm.chat(
@@ -427,35 +471,47 @@ def _generate_distractor_option_with_llm(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.4,
-            max_tokens=200,
-            purpose="distractor_options",
+            max_tokens=max(500, 180 * len(event_payload)),
+            purpose="detail_distractor_batch",
         )
     except Exception as e:
-        logger.warning("[LLM] distractors generation failed: %s", e)
-        return []
-    items = _extract_first_json_array(raw)
-    cleaned = []
-    for it in items:
-        it = str(it).strip()
-        if not it or _looks_placeholder_option(it):
+        logger.warning("[LLM] detail distractor batch generation failed: %s", e)
+        return {}
+
+    payload = _extract_first_json_array_payload(raw)
+    result: Dict[str, List[str]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
             continue
-        cleaned.append(it)
-    return cleaned
+        event_name = str(item.get("event_name") or "").strip()
+        raw_options = item.get("distractor_options") or []
+        if not event_name or not isinstance(raw_options, list):
+            continue
+        cleaned_options = []
+        for option in raw_options:
+            text = str(option).strip()
+            if not text or _looks_placeholder_option(text):
+                continue
+            cleaned_options.append(text)
+        if cleaned_options:
+            result[event_name] = _ensure_list_unique(cleaned_options)
+    return result
 
 
 def _build_distractor_options(
     event_name: str,
     correct_items: List[str],
     candidate_pool: List[str],
+    llm_result_map: Optional[Dict[str, List[str]]] = None,
     target_total: int = 4,
 ) -> List[str]:
     need = max(0, target_total - len(correct_items))
     if need == 0:
         return []
-    distractors = _generate_distractor_option_with_llm(event_name, correct_items, max_items=need)
+    distractors = (llm_result_map or {}).get(event_name) or []
     if distractors:
         return [d for d in distractors if d not in correct_items][:need]
-    # Fallback: 使用其他子事件名称
+    # Fallback: 使用其他事件里的物体名
     result = []
     for name in candidate_pool:
         if name in correct_items:
@@ -468,36 +524,69 @@ def _build_distractor_options(
     return result
 
 
-def _generate_distractor_event_with_llm(event_name: str, event_desc: str) -> str:
+def _generate_distractor_events_with_llm(activity: str, events: List[Dict[str, str]]) -> Dict[str, str]:
+    if not events:
+        return {}
+    model_name = str(
+        get_config_value("models.unity_generation.confusion_event_batch_model", "qwen3.6-plus")
+    ).strip() or "qwen3.6-plus"
     try:
-        llm = SiliconFlowLLM()
+        llm = BailianLLM(model=model_name)
     except Exception as e:
-        logger.warning("[LLM] SiliconFlow init failed: %s", e)
-        return ""
-    prompt = (
-        "请为下面事件生成一个“混淆事件选项”，用于回忆题目的错误选项。\n"
-        f"正确事件名：{event_name}\n"
-        f"事件内容：{event_desc}\n"
-        "要求：只输出一个简短的事件名称（例如“选购肉品”），"
-        "与正确事件明显不同；不要输出多项或列表。"
-        "不要添加任何前缀或解释（例如“混淆子事件选项：”）。"
+        logger.warning("[LLM] Bailian init failed: %s", e)
+        return {}
+
+    try:
+        with open(resolve_prompt_path("confusion_event_batch"), "r", encoding="utf-8") as f:
+            prompt_template = f.read()
+    except Exception as e:
+        logger.warning("[LLM] confusion_event_batch prompt load failed: %s", e)
+        return {}
+
+    event_payload = [
+        {
+            "event_name": (event.get("event_name") or "").strip(),
+        }
+        for event in events
+    ]
+    prompt = prompt_template.replace("{{ACTIVITY_NAME}}", (activity or "").strip())
+    prompt = prompt.replace(
+        "{{EVENTS_JSON}}",
+        json.dumps(event_payload, ensure_ascii=False, indent=2),
     )
     try:
         raw = llm.chat(
             messages=[
-                {"role": "system", "content": "你是严格的中文短句生成器。"},
+                {"role": "system", "content": "你是严格的 JSON 生成器。"},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.6,
-            max_tokens=120,
-            purpose="distractor_option",
+            temperature=0.4,
+            max_tokens=max(300, 120 * len(event_payload)),
+            purpose="confusion_event_batch",
         )
     except Exception as e:
-        logger.warning("[LLM] distractor option generation failed: %s", e)
-        return ""
-    text = (raw or "").strip()
-    text = re.sub(r"^\s*混淆.*?[:：]\s*", "", text)
-    return text.strip()
+        logger.warning("[LLM] confusion event batch generation failed: %s", e)
+        return {}
+
+    payload = _extract_first_json_array_payload(raw)
+    result: Dict[str, str] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        event_name = str(item.get("event_name") or "").strip()
+        distractor = str(item.get("distractor_option") or "").strip()
+        distractor = re.sub(r"^\s*混淆.*?[:：]\s*", "", distractor).strip()
+        if not event_name or not distractor or _looks_placeholder_option(distractor):
+            continue
+        result[event_name] = distractor
+    return result
+
+
+def _fallback_distractor_event(event_name: str, candidate_names: List[str]) -> str:
+    for candidate in candidate_names:
+        if candidate and candidate != event_name:
+            return candidate
+    return ""
 
 
 def _build_activity_options(
@@ -558,6 +647,15 @@ def _extract_detail_question(item: Dict[str, Any]) -> Tuple[str, List[str], str]
         if not opt or opt in final_opts:
             continue
         final_opts.append(opt)
+    if correct and correct not in final_opts:
+        final_opts.insert(0, correct)
+    if correct:
+        wrong_opts = [opt for opt in final_opts if opt != correct]
+        final_opts = [correct]
+        if wrong_opts:
+            final_opts.append(wrong_opts[0])
+    else:
+        final_opts = final_opts[:2]
     return question, final_opts, correct
 
 
@@ -1049,6 +1147,16 @@ def generate_game_meta_flow(
 
     # 收集 recall 任务
     recall_tasks = []
+    distractor_event_map = _generate_distractor_events_with_llm(
+        activity,
+        [
+            {
+                "event_name": ev.get("name") or ev.get("description", ""),
+            }
+            for ev in filtered
+        ]
+    )
+    event_name_pool = [ev.get("name") or ev.get("description", "") for ev in filtered]
     for i, ev in enumerate(filtered, start=2):
         stage_id = f"stage_{i:03d}"
         if stage_id in existing_stage_ids:
@@ -1059,7 +1167,7 @@ def generate_game_meta_flow(
         long_desc = event_desc or "".join(
             [c.get("description", "") for c in scene_clues if c.get("description")]
         )
-        distractor_opt = _generate_distractor_event_with_llm(event_name, event_desc)
+        distractor_opt = distractor_event_map.get(event_name) or _fallback_distractor_event(event_name, event_name_pool)
         
         task = {
             "stage_id": stage_id,
@@ -1144,6 +1252,22 @@ def generate_game_meta_flow(
     for ev2 in filtered:
         ev_items = _event_items(ev2)
         all_items_pool.extend([it.get("item_name") for it in ev_items if it.get("item_name")])
+    detail_distractor_map = _generate_detail_distractor_options_with_llm(
+        activity,
+        [
+            {
+                "event_name": ev.get("name") or ev.get("description", ""),
+                "correct_items": [it.get("item_name") for it in _event_items(ev) if it.get("item_name")],
+                "max_items": max(
+                    1,
+                    DETAIL_OPTION_TOTAL
+                    - len([it.get("item_name") for it in _event_items(ev) if it.get("item_name")]),
+                ),
+            }
+            for ev in filtered
+            if _event_items(ev)
+        ],
+    )
 
     for i, ev in enumerate(filtered, start=0):
         stage_id = f"stage_{detail_start + i:03d}"
@@ -1152,7 +1276,13 @@ def generate_game_meta_flow(
         event_name = ev.get("name") or ev.get("description", "")
         event_items = _event_items(ev)
         items = [it.get("item_name") for it in event_items if it.get("item_name")]
-        distractor_options = _build_distractor_options(event_name, items, all_items_pool, target_total=DETAIL_OPTION_TOTAL)
+        distractor_options = _build_distractor_options(
+            event_name,
+            items,
+            all_items_pool,
+            llm_result_map=detail_distractor_map,
+            target_total=DETAIL_OPTION_TOTAL,
+        )
         options_text = _build_detail_options(DETAIL_OPTION_TOTAL, items, distractor_options)
         options_with_images = None
         if option_image_generator and options_text:

@@ -165,3 +165,56 @@ def _is_cjk(ch: str) -> bool:
     )
 
 
+class BailianLLM:
+    def __init__(self, model: str | None = None) -> None:
+        cfg = get_config_value("models.bailian", {})
+        api_key = cfg.get("api_key")
+        if not api_key:
+            raise ValueError("BAILIAN_API_KEY (or DASHSCOPE_API_KEY) not set; cannot call Bailian.")
+        self.client = OpenAI(
+            base_url=cfg.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            api_key=api_key,
+            timeout=float(cfg.get("timeout_seconds", 120)),
+        )
+        self.model = model or cfg.get("model", "qwen3.6-plus")
+        self.default_temperature = float(cfg.get("temperature", 0.2))
+        self.default_max_tokens = int(cfg.get("max_tokens", 4096))
+        self.logger = logging.getLogger(__name__)
+
+    def chat(
+        self,
+        messages: list[dict],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
+        purpose: str | None = None,
+    ) -> str:
+        use_model = model or self.model
+        use_temperature = self.default_temperature if temperature is None else temperature
+        use_max_tokens = self.default_max_tokens if max_tokens is None else max_tokens
+        self.logger.info(
+            "Bailian chat call: model=%s temperature=%s max_tokens=%s",
+            use_model,
+            use_temperature,
+            use_max_tokens,
+        )
+        resp = self.client.chat.completions.create(
+            model=use_model,
+            messages=messages,
+            temperature=use_temperature,
+            max_tokens=use_max_tokens,
+        )
+        usage = getattr(resp, "usage", None)
+        if usage:
+            self.logger.info(
+                "Bailian token usage: prompt=%s completion=%s total=%s",
+                getattr(usage, "prompt_tokens", None),
+                getattr(usage, "completion_tokens", None),
+                getattr(usage, "total_tokens", None),
+            )
+        content = resp.choices[0].message.content or ""
+        if content:
+            self.logger.info("Bailian response: %s", content)
+        return content
+
+
